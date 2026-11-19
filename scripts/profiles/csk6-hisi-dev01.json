@@ -148,8 +148,8 @@
   ],
   "commissioning": {
     "approved_by": "郑保山",
-    "approval_ref": "NOAH-263",
-    "approved_at": "2026-11-19 17:00:00",
+    "approval_ref": "NOAH-266",
+    "approved_at": "2026-11-19 19:30:00",
     "expires_at": "2026-11-21 23:59:59",
     "node": "win003",
     "device": {
@@ -175,7 +175,7 @@
     "allowed_steps": ["burn:csk6", "verify:csk6", "burn:hisi", "verify:hisi"],
     "max_write_steps": 2,
     "max_runs": 1,
-    "note": "NOAH-263 受控首跑：只按本 profile 的 argv 与钉住的资产 SHA 写一次，两次写（CSK6 + HISI）各一次、不重试；预门禁任一失败则设备零动作；跑完由 commissioning.receipt.json promote，不手改状态"
+    "note": "NOAH-266 二次 commissioning：NOAH-263 首跑已在 win003 消耗（burn:csk6 FAIL），本批准只允许重跑一次，只按本 profile 的 argv 与钉住的资产 SHA 写（CSK6 + HISI 各一次，不重试）；预门禁任一失败则设备零动作；跑完由 commissioning.receipt.json promote，失败不升 measured"
   },
   "acceptance": {
     "independent_items": [

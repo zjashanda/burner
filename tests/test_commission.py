@@ -27,7 +27,7 @@ from core.profile import Profile, ProfileError  # noqa: E402
 DEV01 = ROOT / "scripts" / "profiles" / "csk6-hisi-dev01.json"
 WRITE_SIZE = 5685248
 DEVICE_MD5 = "0xf6d6369435d52784efe1119ebd08f582"
-APPROVAL = "NOAH-263"
+APPROVAL = json.loads(DEV01.read_text(encoding="utf-8"))["commissioning"]["approval_ref"]
 NODE = "win003"
 
 
