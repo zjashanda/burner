@@ -1,6 +1,6 @@
 ---
 name: burner
-description: VenusA/CSK 与 HISI/HI3863 双芯片统一烧录 Skill。按 profile 执行 preflight → boot → burn → verify → recover → receipt，统一资产 manifest（OSS 路径 + SHA-256）、北京时间无时区时间契约、dry-run / confirm-write / 硬件互斥锁；TCL 与 Media（美的）profile 严格隔离。用于台架固件烧录、已知基线回归和换版本验证。
+description: VenusA/CSK 与 HISI/HI3863 双芯片统一烧录 Skill。按 profile 执行 preflight → boot → burn → verify → recover → receipt，统一资产 manifest（OSS 路径 + SHA-256）、北京时间无时区时间契约、dry-run / confirm-write / 硬件互斥锁；TCL、Media（美的）与 CSK6 CH344 dev01 台架严格隔离。用于台架固件烧录、已知基线回归和换版本验证。
 ---
 
 # burner
@@ -92,7 +92,7 @@ python scripts\burn.py all --profile ... --run-dir ... --device-snapshot role-ma
 |---|---|---|
 | `preflight` | 枚举 COM、读当前版本、校验资产 hash | `steps/preflight.json`、`serial_logs/preflight_*.log` |
 | `boot:<chip>` | 仅 `boot.required` 的芯片：断电 → boot strap → 上电 → 撤 strap | `steps/boot-*.json`、`reset_log.jsonl` |
-| `burn:<chip>` | `venusa-uart`：`Uart_Burn_Tool -b -p -f -a`；`hisi-burntool`：`BurnTool -com -bin -signalbaud -chiptype -onlyburn` + 断电上电 | `steps/burn-*.json`、`tool_logs/tool_*.log`、BurnTool `optLog` |
+| `burn:<chip>` | `venusa-uart`：`Uart_Burn_Tool -b -p -f -a`；`hisi-burntool`：`BurnTool -com -bin -signalbaud -chiptype -onlyburn` + 断电上电；`csk6-uart`：`Uart_Burn_Tool` + WRITE SIZE / 设备 MD5 / 4 标记判定 | `steps/burn-*.json`、`tool_logs/tool_*.log`、BurnTool `optLog` |
 | `verify:<chip>` | 断电上电，抓串口版本，按 `verify.expect` 判定 | `steps/verify-*.json`、`serial_logs/verify-*_*.log` |
 | `recover:<chip>` | `ftm-clear`（`AT+FTM=0`）或 `power-cycle`；`before_verify` 决定顺序 | `steps/recover-*.json` |
 | `receipt` | 汇总所有步骤 + 资产 + reset_log + 产物 SHA-256 | `run.receipt.json` |
@@ -103,6 +103,9 @@ python scripts\burn.py all --profile ... --run-dir ... --device-snapshot role-ma
 
 - `scripts/profiles/tcl-pvm1005.json`：TCL 台架实测值（COM6 控制、COM3 CSK、COM4 HISI、`uut-switch1`/`uut-csk-boot`、BurnTool 后 `115200 → AT+FTM=0 → 921600`）。
 - `scripts/profiles/midea-csk6.json`：Media/美的 **draft**，声明自己的驱动方式与待测量项，不继承 TCL 的任何端口/命令/时序。
+- `scripts/profiles/csk6-hisi-dev01.json`：CSK6 + HISI CH344 四串口 dev01 台架（win003/win005 **共用一台**）**draft**。
+  端口只是 win003 参考值：**跨节点禁止复用 COM 映射**，运行时必须逐节点枚举并传 `--device-snapshot`。
+  CSK6 走 `csk6-uart`（WRITE SIZE + 设备 MD5 + 4 标记 + exit 0 才 PASS）；未测量项全在 `measurement_required`。
 
 TCL 与 Media 的差异、隔离规则和独立验收项见 `references/profile-contract.md`。
 
@@ -138,6 +141,12 @@ python tools\time_lint.py --gate            # 时间契约：0 违规才算过�
 4. **BurnTool 的 stdout 为空是常态**：成功证据在 `BurnTool_Gold\optLog\optLog_*.txt`（“烧写完成成功”），不在 stdout。
 5. **CSK 串口平时静默**：preflight 读不到版本不等于设备异常；版本证据以 `boot:venusa`/`verify:venusa` 后的启动横幅为准。
 6. **两台并发 = 双方失败**：CSK 烧录需要独占 boot strap 与 COM3；由 `BenchLock` 兜底。
+7. **CSK6 台架的 COM 编号跟着节点变**：同一台 CH344 dev01 在 win003 与 win005 上编号完全不同，
+   把另一节点的映射抄过来会把日志口当烧录口（`kb-knowledge-99ced0adc4e3`）。运行时必须传 `--device-snapshot`。
+8. **CSK6 烧录不看"像成功"**：`csk6-uart` 必须同时满足 WRITE SIZE = 实测字节数、设备 MD5 = 实测 MD5、
+   4 个标记齐全、exit 0（`kb-knowledge-368ec0d51d2c`）；缺一项即 FAIL，不用其他项 PASS 抵消。
+9. **设备版本串保留前导 `V`**：CSK6 打印 `venus ap appliction(V4.1.8@…)`，比较时按设备原文，
+   不要在代码里偷偷去 `V`；真实差异（如 46.1.5 vs 46.1.8）照实记 FAIL/NEEDS_REVIEW。
 
 ## 基线验收（2026-11-10 / pvm1005）
 

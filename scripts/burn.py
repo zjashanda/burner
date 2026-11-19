@@ -76,6 +76,8 @@ def plan_text(profile: Profile, assets: Assets, material_dir: Path | None, cache
             chip = profile.chip(chip_id)
             if step.startswith("burn:"):
                 detail = f"{chip.driver}: {chip.tool_asset} -> {chip.image_asset}"
+                if chip.package_asset:
+                    detail += f"  (package {chip.package_asset})"
             elif step.startswith("verify:"):
                 detail = f"{chip.verify.get('version_key')}={chip.verify.get('expect')}"
             elif step.startswith("boot:"):
@@ -85,10 +87,18 @@ def plan_text(profile: Profile, assets: Assets, material_dir: Path | None, cache
                 detail = str(chip.recover.get("command") or chip.recover.get("driver"))
         lines.append(f"  {index}. {step}" + (f"  [{detail}]" if detail else ""))
     lines += ["", "assets:"]
-    for asset_id in profile.asset_ids():
+    planned = list(profile.asset_ids())
+    for chip in profile.chips:
+        if chip.package_asset and chip.package_asset not in planned:
+            planned.append(chip.package_asset)
+    for asset_id in planned:
         entry = assets.describe(asset_id)
+        if entry["oss"].get("download") == "local-only":
+            where = "availability=local-only（未登记可下载位置）"
+        else:
+            where = f"oss://<bucket>/{entry['oss']['key']}"
         lines.append(f"  {asset_id}: {entry['target_chip']} {entry['version']} {entry['file']} "
-                     f"sha256={entry['sha256'][:16]}... oss://<bucket>/{entry['oss']['key']}")
+                     f"sha256={entry['sha256'][:16]}... {where}")
     if snapshot:
         lines += snapshot_lines(snapshot)
     return "\n".join(lines)

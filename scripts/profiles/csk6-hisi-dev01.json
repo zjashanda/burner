@@ -1,0 +1,154 @@
+{
+  "schema": "burner-profile/v1",
+  "name": "csk6-hisi-dev01",
+  "node": "csk6-hisi-dev01",
+  "nodes": ["win003", "win005"],
+  "board_family": "generic",
+  "board": "CSK6 + HI3863(WS63) 双芯片 CH344 四串口台架 dev01（module_only）",
+  "status": "draft",
+  "time_contract": "beijing-no-offset",
+  "preflight_window_s": 6,
+  "verified": null,
+  "port_map_reference": {
+    "note": "跨节点禁止复用 COM 映射：同一批 CH344 台架在 win003 与 win005 上编号完全不同，执行前必须逐节点重新枚举并生成 port-map，再用 --device-snapshot 传入。本 profile 的 control.port / transport.*_port 只是 win003 参考值，任何节点都不得直接套用。",
+    "source": ["kb-knowledge-99ced0adc4e3"],
+    "win003": {"control": "COM36", "csk6:log": "COM35", "csk6:burn": "COM34", "hisi:log": "COM32", "hisi:burn": "COM32"},
+    "win005": {"control": "COM15", "csk6:log": "COM36", "csk6:burn": "COM37", "hisi:log": "COM39", "hisi:burn": "COM39"}
+  },
+  "control": {
+    "kind": "serial-relay",
+    "port": "COM36",
+    "baud": 115200,
+    "line_ending": "crlf",
+    "allow_tcl_commands": true,
+    "allow_tcl_commands_reason": "本台架沿用 uut-switch1 继电器作上下电；这是一条显式声明，不是从 tcl-pvm1005 继承的时序",
+    "commands": {
+      "power_cut": "uut-switch1.on",
+      "power_restore": "uut-switch1.off"
+    },
+    "receipt_tokens": {
+      "uut-switch1": "switch_idx1_set"
+    },
+    "receipt_fallback": "switch_idx1_set",
+    "forbidden_commands": [
+      "uut-reset",
+      "uut-csk-reset",
+      "uut-burn"
+    ],
+    "forbidden_reason": "uut-reset/uut-csk-reset/uut-burn 属于 win009/CSK6 专用命令集，本台架上下电只用 uut-switch1.on/off",
+    "timing": {
+      "cycle_hold_s": 3.0
+    },
+    "timing_note": "cycle_hold_s=3 s 取自复用验证执行卡（uut-switch1.off → 3 s → uut-switch1.on）；其余时序项待实测"
+  },
+  "chips": [
+    {
+      "id": "csk6",
+      "chip": "CSK6 / VenusA（V40.x 固件线）",
+      "boot": {
+        "required": false,
+        "method": null,
+        "note": "Uart_Burn_Tool 自行完成进烧录模式；本台架未实测是否需要额外 boot strap，保持 required=false 直到节点证据推翻"
+      },
+      "transport": {
+        "log_port": "COM35",
+        "log_baud": 115200,
+        "burn_port": "COM34",
+        "burn_baud": null
+      },
+      "burn": {
+        "driver": "csk6-uart",
+        "tool": null,
+        "image": null,
+        "package": "csk6-v40.1.11-package",
+        "image_addr": null,
+        "argv_template": null,
+        "success_markers": [
+          "CONNECT WITH CHIP SUCCESS",
+          "CHIP TYPE = 0x60120001",
+          "MD5 CHECK SUCCESS",
+          "FLASH 0x0 SECTOR DOWNLOAD SUCCESS"
+        ],
+        "expected_write_bytes": null,
+        "expected_md5": null,
+        "timeout_s": 600,
+        "note": "4 个成功标记与 WRITE SIZE / 设备 MD5 判据来自 kb-knowledge-368ec0d51d2c；工具版本、烧录波特率、镜像地址与 V40.1.11 的实测字节数/MD5 未测，全部留空并列入 measurement_required"
+      },
+      "verify": {
+        "version_key": "csk6_app",
+        "require_keys": ["csk6_app"],
+        "require_lines": ["AP Boot Ready"],
+        "expect": null,
+        "window_s": null,
+        "note": "设备原文形如 venus ap appliction(V4.1.8@Nov 11 2026 12:27:56)；expect 必须写设备原文而不是包名，未测前留空"
+      },
+      "recover": {
+        "required": false,
+        "driver": "none",
+        "note": "CSK6 烧后无 FTM 工厂模式步骤；不做任何未实测的恢复动作"
+      }
+    },
+    {
+      "id": "hisi",
+      "chip": "HI3863 / WS63",
+      "boot": {
+        "required": false
+      },
+      "transport": {
+        "log_port": "COM32",
+        "log_baud": 1500000,
+        "burn_port": "32",
+        "burn_baud": null
+      },
+      "burn": {
+        "driver": "hisi-burntool",
+        "tool": "hisi-burntool-gold",
+        "image": null,
+        "chip_type": "13",
+        "signal_baud": null,
+        "onlyburn_parts": [],
+        "success_tokens": ["成功", "完成"],
+        "failure_tokens": ["失败"],
+        "timeout_s": 420,
+        "note": "分区集必须与本包实际分区一致（9 vs 8 会误判，kb-knowledge-5f25b39ebe82）；onlyburn_parts 待本包实测后填全"
+      },
+      "verify": {
+        "version_key": "hisi_sys_ver",
+        "require_keys": ["hisi_sys_ver"],
+        "expect": null,
+        "window_s": null
+      },
+      "recover": {
+        "required": false,
+        "driver": "none",
+        "note": "本台架未实测 BurnTool 是否把 HISI 留在 FTM；在节点证据出现前不套用 TCL 的 AT+FTM=0"
+      }
+    }
+  ],
+  "measurement_required": [
+    "逐节点重新枚举 CH344 端口并生成 port-map.json，运行时用 --device-snapshot 传入；profile 内 COM 仅为 win003 参考值，禁止跨节点复用（kb-knowledge-99ced0adc4e3）",
+    "control 继电器命令与回执 token 的现场核对（uut-switch1.on/off + switch_idx1_set 是否仍适用），以及 control.timing 的 cut_to_strap_s / strap_to_restore_s / restore_to_strap_off_s / cycle_hold_s 实测值",
+    "CSK6 Uart_Burn_Tool（历史版本 1.0.5）的 bytes / sha256 与节点缓存路径，登记进 assets/manifest.json 后填 burn.tool",
+    "CSK6 burn_baud 与 burn.image_addr（Uart_Burn_Tool -b/-a 的实际取值）；若工具参数不同则填 burn.argv_template",
+    "CSK6 写入镜像：V40.1.11_20261119094552.7z 解包后的镜像文件名 / bytes / sha256，登记为独立 firmware 资产后填 burn.image",
+    "CSK6 V40.1.11 的 expected_write_bytes（WRITE SIZE）与 expected_md5（设备 MD5），以及 4 个成功标记在 1.0.5 输出中的原文核对",
+    "CSK6 verify.expect 的设备原文（venus ap appliction(V40.1.11@...)）与 verify.window_s",
+    "HISI 的 burn_baud / signal_baud / chip_type 与 onlyburn_parts 分区集（本包 9 或 8 个分区需实测确认）",
+    "HISI 镜像资产登记（本包内 HISI bin 的 bytes / sha256）；确认台架 BurnTool 与已登记 hisi-burntool-gold 的 sha256 一致",
+    "HISI verify.expect 的设备原文与 verify.window_s",
+    "把 status 升级为 measured 的节点实测证据（burn/verify step receipt + 串口日志 + 8090 归档 URI），不得只凭代码通过"
+  ],
+  "acceptance": {
+    "independent_items": [
+      "拓扑与设备存在性：先记录 topology=module_only / baseboard_present 与 baseboard_absent，再逐节点重新枚举端口",
+      "CSK6 烧录：WRITE SIZE + 设备 MD5 + 4 个标记 + exit 0",
+      "HISI 烧录：optLog 分区集与写结果",
+      "上下电后启动：串口实际字节数与启动横幅",
+      "120 s 稳定性：复位次数 / 间隔 / 异常行（module_only 下 13 s 周期复位记 EXPECTED_TOPOLOGY_BEHAVIOR）",
+      "资源监测：残留进程 / 句柄 / 可用内存",
+      "版本验收：设备原文 vs 包名原文"
+    ],
+    "rubric": "整机结论取最差项；任一 FAIL / NEEDS_REVIEW 不得被其他 PASS 抵消（kb-method-cad7be93134e）",
+    "differences_reference": "references/profile-contract.md#csk6--hisi-dev01-台架"
+  }
+}

@@ -1,7 +1,7 @@
 {
   "schema": "ark.skill-index.v1",
   "skill": "burner",
-  "skill_version": "1.2.0",
+  "skill_version": "1.3.0",
   "repo": "zjashanda/burner",
   "route_schema": "ark.skill-route.v1",
   "route_order": [
@@ -213,12 +213,13 @@
       ],
       "project": [
         "tcl-pvm1005",
-        "midea-csk6"
+        "midea-csk6",
+        "csk6-hisi-dev01"
       ],
       "firmware_family": [
         "any-registered"
       ],
-      "profile": "tcl-pvm1005 | midea-csk6",
+      "profile": "tcl-pvm1005 | midea-csk6 | csk6-hisi-dev01",
       "workflow": "wf.burn.preflight-only",
       "inputs": [
         "profile（必填）",
@@ -230,11 +231,54 @@
       ],
       "preconditions": [
         "只读，不改变设备状态；不需要 --confirm-write",
-        "midea-csk6 status=draft 时 preflight 返回 BLOCKED 并列出待测量项"
+        "midea-csk6 status=draft 时 preflight 返回 BLOCKED 并列出待测量项",
+        "csk6-hisi-dev01 status=draft 时 preflight 返回 BLOCKED；带 --device-snapshot 时仍会输出逐节点 roles"
       ],
       "evidence_schema": "burner-phase/v1",
       "version": "1.1.0",
       "status": "active"
+    },
+    {
+      "capability_id": "burn.csk6-hisi-dev01",
+      "skill": "burner",
+      "module": "burn",
+      "chip": [
+        "csk6",
+        "hisi"
+      ],
+      "project": [
+        "csk6-hisi-dev01"
+      ],
+      "firmware_family": [
+        "csk6-v40.1.11",
+        "hisi-ws63"
+      ],
+      "profile": "csk6-hisi-dev01",
+      "workflow": "wf.burn.csk6-hisi-dev01",
+      "inputs": [
+        "profile: scripts/profiles/csk6-hisi-dev01.json（status=draft）",
+        "逐节点枚举的 port-map（--device-snapshot，必填；profile 内 COM 只是 win003 参考值）",
+        "CSK6 写入镜像 + V40.1.11 分发包 csk6-v40.1.11-package",
+        "HISI 镜像与 BurnTool_Gold"
+      ],
+      "outputs": [
+        "steps/preflight.json（含 device_snapshot 的 roles）",
+        "steps/burn-csk6.json（WRITE SIZE / 设备 MD5 / 4 标记 / exit）",
+        "tool_logs/tool_csk6.log、tool_logs/tool_hisi.log",
+        "serial_logs/verify-*_*.log",
+        "run.receipt.json（burner-receipt/v1）"
+      ],
+      "preconditions": [
+        "profile status=draft：只允许 plan/preflight；写阶段一律退出码 3",
+        "升级 measured 必须先补齐 measurement_required 的实测值（含 expected_write_bytes / expected_md5）",
+        "跨节点禁止复用 COM 映射（kb-knowledge-99ced0adc4e3）；必须传 --device-snapshot",
+        "CSK6 PASS 判据：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0（kb-knowledge-368ec0d51d2c）",
+        "HISI 分区集与本包不一致记 NEEDS_REVIEW，不得写 PASS"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.0.0",
+      "status": "draft",
+      "blocked_reason": "profile 未 measured；写驱动已实现并单测，但真机证据由 win003/win005 节点 Issue 产出后才允许升级"
     }
   ],
   "chips": [
@@ -267,6 +311,18 @@
       "tool": "CSK6_Burn.bat（未登记 SHA-256）",
       "profiles": [
         "midea-csk6"
+      ],
+      "status": "draft"
+    },
+    {
+      "chip_id": "csk6-uart",
+      "name": "CSK6 / VenusA（V40.x 固件线，Uart_Burn_Tool）",
+      "driver": "csk6-uart",
+      "boot_required": false,
+      "tool": "Uart_Burn_Tool（CSK6 版，bytes/sha256 待节点侧登记）",
+      "chip_type_marker": "0x60120001",
+      "profiles": [
+        "csk6-hisi-dev01"
       ],
       "status": "draft"
     }
@@ -303,6 +359,27 @@
         "burn.port-asset-preflight"
       ],
       "blocked_reason": "draft profile 只允许 plan/preflight；写阶段一律拒绝，待测量项见 measurement_required"
+    },
+    {
+      "project_id": "csk6-hisi-dev01",
+      "board": "CSK6 + HI3863(WS63) CH344 四串口台架 dev01",
+      "node": "win003 | win005（共用同一台 dev01，端口逐节点枚举）",
+      "board_family": "generic",
+      "profile": "scripts/profiles/csk6-hisi-dev01.json",
+      "profile_status": "draft",
+      "verified_on": null,
+      "verified_by": null,
+      "capabilities": [
+        "burn.csk6-hisi-dev01",
+        "burn.port-asset-preflight"
+      ],
+      "blocked_reason": "profile draft：写阶段一律拒绝；升级 measured 需节点实测 WRITE SIZE / MD5 / 端口映射与启动版本原文",
+      "knowledge": [
+        "kb-knowledge-99ced0adc4e3",
+        "kb-knowledge-368ec0d51d2c",
+        "kb-knowledge-158d1416a657",
+        "kb-method-cad7be93134e"
+      ]
     }
   ],
   "firmware_profiles": [
@@ -325,6 +402,17 @@
       "sha256": "ed2eaf013cc761ede525704a0cae3ccca4bbaf9e6f78cf99f45af7e6bf7927f4",
       "write_addr": "由 BurnTool -onlyburn 分区集决定",
       "note": "分区集 9 vs 8 会影响 PASS 判定，见 ark-kb kb-knowledge-5f25b39ebe82"
+    },
+    {
+      "firmware_id": "csk6-v40.1.11-package",
+      "chip": "csk6",
+      "version": "V40.1.11",
+      "file": "V40.1.11_20261119094552.7z",
+      "bytes": 38827193,
+      "sha256": "b70eca75db330e801ef6c66fdac33f645e687501a92a48dd7d83b96a69563154",
+      "write_addr": null,
+      "availability": "node-attachment（win003 实测；尚未上传 8090，oss.download=local-only，不构造猜测 URL）",
+      "note": "7z 是分发包，不是写入镜像；解包后的镜像 file/bytes/sha256 与写地址需实测后另登记（见 profile.measurement_required）"
     }
   ],
   "tools": [
@@ -409,6 +497,64 @@
         "preflight"
       ],
       "entry": "python scripts/burn.py preflight --profile ... --run-dir <dir>"
+    },
+    {
+      "workflow_id": "wf.burn.csk6-hisi-dev01",
+      "steps": [
+        "preflight",
+        "burn:csk6",
+        "verify:csk6",
+        "burn:hisi",
+        "verify:hisi",
+        "receipt"
+      ],
+      "entry": "python scripts/burn.py plan|preflight --profile scripts/profiles/csk6-hisi-dev01.json --run-dir <dir> --device-snapshot <port-map.json>（draft：写阶段需先把 profile 升级为 measured）",
+      "note": "严格串行；任一步 FAIL/BLOCKED 即停并写出 FAIL 回执。CSK6 驱动 csk6-uart 已实现并单测，真机验收由节点侧 Issue 执行",
+      "judgement_items": [
+        {
+          "n": 1,
+          "item": "拓扑与设备存在性（topology=module_only|baseboard_present、baseboard_absent、SPI 对端）+ 逐节点端口枚举",
+          "maps_to": "preflight（--device-snapshot）",
+          "kb": "kb-method-c3adcba01df0 / kb-knowledge-99ced0adc4e3"
+        },
+        {
+          "n": 2,
+          "item": "CSK6 烧录：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0",
+          "maps_to": "burn:csk6",
+          "kb": "kb-knowledge-368ec0d51d2c"
+        },
+        {
+          "n": 3,
+          "item": "HISI 烧录：optLog 分区集与写结果（分区集不一致记 NEEDS_REVIEW）",
+          "maps_to": "burn:hisi",
+          "kb": "kb-knowledge-5f25b39ebe82"
+        },
+        {
+          "n": 4,
+          "item": "上下电后启动：串口实际字节数与启动横幅（AP Boot Ready / HI3863 启动行）",
+          "maps_to": "verify:csk6 / verify:hisi",
+          "kb": "kb-knowledge-8ec3191c1698"
+        },
+        {
+          "n": 5,
+          "item": "120 s 稳定性：复位次数/间隔/异常行；module_only 下 13 s 周期复位记 EXPECTED_TOPOLOGY_BEHAVIOR",
+          "maps_to": "verify 窗口外独立观测（lstest 侧）",
+          "kb": "kb-knowledge-84602a2f32dc"
+        },
+        {
+          "n": 6,
+          "item": "资源监测：残留进程 / 句柄 / 可用内存",
+          "maps_to": "burn 与 verify 前后采样（lstest 侧）",
+          "kb": "kb-knowledge-158d1416a657"
+        },
+        {
+          "n": 7,
+          "item": "版本验收：设备原文 vs 包名原文（只消掉前导 V，中文档如实记差异）",
+          "maps_to": "verify:csk6（version_key=csk6_app） / verify:hisi（hisi_sys_ver）",
+          "kb": "kb-knowledge-5b92a7b0c5d9"
+        }
+      ],
+      "verdict_rule": "整机结论取最差项；任一 FAIL/NEEDS_REVIEW 不得被其他 PASS 抵消（kb-method-cad7be93134e）"
     }
   ],
   "compatibility": [
@@ -435,6 +581,22 @@
       "firmware": "未注册",
       "status": "draft",
       "evidence": "profile.measurement_required 未完成；写阶段禁止"
+    },
+    {
+      "profile": "csk6-hisi-dev01",
+      "chip": "csk6",
+      "tool": "Uart_Burn_Tool（CSK6 版，未登记 sha256）",
+      "firmware": "csk6-v40.1.11-package（bytes 38827193 / sha256 b70eca75…）",
+      "status": "draft",
+      "evidence": "驱动 csk6-uart 已实现并单测；真机 WRITE SIZE/MD5 与端口映射未测，写阶段禁止"
+    },
+    {
+      "profile": "csk6-hisi-dev01",
+      "chip": "hisi",
+      "tool": "hisi-burntool-gold@unversioned-20261027",
+      "firmware": "未注册（本包 HISI bin 待登记）",
+      "status": "draft",
+      "evidence": "分区集与 signal_baud 未实测；写阶段禁止"
     }
   ],
   "task_dir_contract": {
@@ -448,6 +610,6 @@
     "task_dir_owner": "lstest",
     "note": "burner 只写烧录产物，不负责建整套任务目录"
   },
-  "updated_at": "2026-11-19 12:34:30",
-  "updated_by": "NOAH-242"
+  "updated_at": "2026-11-19 15:30:00",
+  "updated_by": "NOAH-247"
 }

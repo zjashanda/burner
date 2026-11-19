@@ -100,8 +100,33 @@
         "source": "HISI firmware mail uid 148 (【最新海思固件及APP版本同步】)",
         "note": "baseline upper-MCU image; BurnTool needs -chiptype:13 (WS63)"
       }
+    },
+    {
+      "id": "csk6-v40.1.11-package",
+      "kind": "firmware",
+      "target_chip": "CSK6/VenusA",
+      "version": "V40.1.11",
+      "file": "V40.1.11_20261119094552.7z",
+      "bytes": 38827193,
+      "sha256": "b70eca75db330e801ef6c66fdac33f645e687501a92a48dd7d83b96a69563154",
+      "oss": {
+        "key": "pending-upload/csk6-v40.1.11/V40.1.11_20261119094552.7z",
+        "object": "V40.1.11_20261119094552.7z",
+        "download": "local-only",
+        "pending_upload": true,
+        "note": "尚未取得可下载位置：优先由节点侧上传 8090 artifacts 后改成 ark-storage URI，再改 download=storage-http；在此之前 fetch 一律 FetchBlocked，不构造猜测 URL"
+      },
+      "install": {
+        "material_rel": "csk6/V40.1.11_20261119094552.7z"
+      },
+      "provenance": {
+        "source": "node-attachment",
+        "node": "win003",
+        "issue": "NOAH-241",
+        "note": "win003 实测 bytes 38827193 + sha256；7z 是分发包，解包后写入镜像的 file/bytes/sha256 需实测后另登记"
+      }
     }
   ],
-  "updated_at": "2026-11-10 14:10:00",
-  "updated_by": "NOAH-44"
+  "updated_at": "2026-11-19 15:40:00",
+  "updated_by": "NOAH-247"
 }

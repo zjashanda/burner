@@ -40,8 +40,14 @@ burner/index/manifest.json → burner/index/index.json → 选中 capability →
 | `burn.version-swap-verify` | 换版本回归 | `wf.burn.version-swap` | active |
 | `burn.recover-ftm-clear` | HISI 烧后 FTM 恢复 | `wf.burn.recover-only` | active |
 | `burn.port-asset-preflight` | 只读预检 | `wf.burn.preflight-only` | active |
+| `burn.csk6-hisi-dev01` | CSK6+HISI CH344 dev01 台架（win003/win005） | `wf.burn.csk6-hisi-dev01` | draft |
 
 `midea-csk6` 只有 `burn.port-asset-preflight`：profile 是 `draft`，写阶段一律拒绝。
+
+`csk6-hisi-dev01` 的写驱动 `csk6-uart` 已实现并有单测，但 profile 仍是 `draft`：
+写阶段拒绝，只允许 `plan` / `preflight`；升级 `measured` 必须由节点实测证据驱动
+（WRITE SIZE、设备 MD5、逐节点端口映射、启动版本原文）。判定拆成 7 项独立判定，
+整机结论取最差项（`kb-method-cad7be93134e`）。
 
 ## 5. 前置检查（任何写阶段之前）
 
