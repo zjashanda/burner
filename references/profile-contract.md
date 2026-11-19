@@ -66,6 +66,12 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
   `image_addr`（`0x...`）、`success_markers`、`expected_write_bytes`（WRITE SIZE）、`expected_md5`（设备 MD5）；
   判定 = exit 0 **且** 标记齐全 **且** WRITE SIZE 相同 **且** MD5 相同，缺一项即 FAIL
   （`kb-knowledge-368ec0d51d2c`）。
+- `burn.pre_power_cycle`（`csk6-uart`，可选布尔）：为 `true` 时在工具打开烧录口**之前**按
+  `control.timing.cycle_hold_s` 做一次断电 → 上电，并全程镜像 `transport.log_port`，回执里记
+  `power.cycle`、`power.serial_log` / `bytes` / `lines` / `error`，且上下电回执不齐即 FAIL；
+  该芯片同时必须有 `control.kind=serial-relay`。默认 `false`，行为与旧版一致。
+  （来源：NOAH-264 首跑 `burn:csk6` 连续 11 次 `CONNECT CHIP OVERTIME`、COM35 6 s 0 字节，
+  无法区分“板子没进下载窗口”和“端口接错”。）
 
 ## 3.1 csk6 + hisi dev01 台架
 

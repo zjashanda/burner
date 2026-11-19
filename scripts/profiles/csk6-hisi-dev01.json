@@ -72,8 +72,9 @@
         ],
         "expected_write_bytes": null,
         "expected_md5": null,
+        "pre_power_cycle": true,
         "timeout_s": 600,
-        "note": "工具=固件包内绑定的 Uart_Burn_Tool v1.0.5（83968 B，sha256 4bfdf680…，NOAH-260 实测；与 1.0.10 资产互不复用）；burn_baud/image_addr/argv 取自包内 CSK6_Burn.bat 原文；4 个成功标记待首跑在 v1.0.5 输出中原文核对；WRITE SIZE 与设备 MD5 只能写后获得"
+        "note": "工具=固件包内绑定的 Uart_Burn_Tool v1.0.5（83968 B，sha256 4bfdf680…，NOAH-260 实测；与 1.0.10 资产互不复用）；burn_baud/image_addr/argv 取自包内 CSK6_Burn.bat 原文；4 个成功标记待首跑在 v1.0.5 输出中原文核对；WRITE SIZE 与设备 MD5 只能写后获得；pre_power_cycle=true 来自 NOAH-264 首跑失败（COM34 11 次 CONNECT CHIP OVERTIME、COM35 6 s 0 字节），烧前先按 control.timing.cycle_hold_s 上下电并全程镜像 COM35 日志"
       },
       "verify": {
         "version_key": "csk6_app",

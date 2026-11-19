@@ -258,16 +258,50 @@ class Dev01ProfileTests(unittest.TestCase):
         self.assertEqual(profile.chip("csk6").driver, "csk6-uart")
 
 
+class FakeControlHandle:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakePortLogger:
+    """Stands in for the serial mirror: no port is ever opened."""
+
+    instances: list["FakePortLogger"] = []
+
+    def __init__(self, port, baud, log_path):
+        self.port, self.baud, self.log_path = port, baud, Path(log_path)
+        self.stop_event = __import__("threading").Event()
+        self.bytes, self.lines, self.error, self.started = 0, [], "", False
+        FakePortLogger.instances.append(self)
+
+    def start(self) -> None:
+        self.started = True
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.log_path.write_text("AP Boot Ready !!!\n", encoding="utf-8", newline="\n")
+        self.lines = ["AP Boot Ready !!!"]
+        self.bytes = 20
+
+
 class Csk6BurnPhaseTests(unittest.TestCase):
     """The whole burn phase with a mocked tool: proves dispatch + receipt shape."""
 
-    def _run(self, output: str, rc: int) -> tuple[dict, dict]:
+    def setUp(self) -> None:
+        FakePortLogger.instances = []
+
+    def _run(self, output: str, rc: int, cycle_verdict: str = "PASS",
+             drop_pre_cycle: bool = False) -> tuple[dict, dict]:
         with tempfile.TemporaryDirectory() as tmp:
             tool = Path(tmp) / "Uart_Burn_Tool.exe"
             tool.write_bytes(b"tool-bytes")
             image = Path(tmp) / "fw.bin"
             image.write_bytes(b"image-bytes")
-            profile_path = write_variant(measured_raw())
+            raw = measured_raw()
+            if drop_pre_cycle:
+                raw["chips"][0]["burn"].pop("pre_power_cycle", None)
+            profile_path = write_variant(raw)
             try:
                 profile = Profile(profile_path)
             finally:
@@ -279,13 +313,32 @@ class Csk6BurnPhaseTests(unittest.TestCase):
                     return tool if asset_id == chip.tool_asset else image
 
             ctx = {"profile": profile, "run_dir": tmp, "assets": FakeAssets(),
-                   "material_dir": None, "cache_dir": None}
+                   "material_dir": None, "cache_dir": None, "audit": mock.MagicMock()}
             canned = {"cmd": ["Uart_Burn_Tool.exe"], "rc": rc, "elapsed_s": 1.5, "output": output}
-            with mock.patch.object(phases_module, "run_tool", lambda *a, **k: canned):
+            opened: list = []
+            cycled: list = []
+
+            def fake_open_control(profile_obj):
+                opened.append(profile_obj.control["port"])
+                return FakeControlHandle()
+
+            def fake_power_cycle(handle, profile_obj, step, audit):
+                cycled.append(step)
+                return {"cut": {"receipt_ok": True}, "restore": {"receipt_ok": True},
+                        "verdict": cycle_verdict}
+
+            with mock.patch.object(phases_module, "run_tool", lambda *a, **k: canned), \
+                    mock.patch.object(phases_module, "open_control", fake_open_control), \
+                    mock.patch.object(phases_module, "power_cycle", fake_power_cycle), \
+                    mock.patch.object(phases_module, "PortLogger", FakePortLogger):
                 receipt = phases_module.phase_burn(ctx, chip)
             log = Path(receipt["tool_log"])
             self.assertTrue(log.is_file(), "the raw tool log must be kept as evidence")
-        return receipt, ctx
+            observed = {"opened": opened, "cycled": cycled,
+                        "loggers": list(FakePortLogger.instances),
+                        "serial_log_exists": [Path(item.log_path).is_file()
+                                              for item in FakePortLogger.instances]}
+        return receipt, observed
 
     def test_dispatch_writes_a_pass_receipt(self):
         receipt, _ = self._run(TOOL_OUTPUT, 0)
@@ -299,6 +352,32 @@ class Csk6BurnPhaseTests(unittest.TestCase):
         receipt, _ = self._run(TOOL_OUTPUT.replace("WRITE SIZE 5685248", "WRITE SIZE ?"), 0)
         self.assertEqual(receipt["verdict"], "FAIL")
         self.assertIn("write_size", receipt["reason"])
+
+    def test_pre_power_cycle_resets_the_board_and_mirrors_the_log_port(self):
+        """NOAH-264: the tool retried CONNECT CHIP OVERTIME because nothing reset the chip."""
+        receipt, observed = self._run(TOOL_OUTPUT, 0)
+        self.assertEqual(observed["cycled"], ["burn:csk6"])
+        self.assertEqual(observed["opened"], ["COM36"])
+        power = receipt["power"]
+        self.assertTrue(power["pre_power_cycle"])
+        self.assertEqual(power["cycle"]["verdict"], "PASS")
+        self.assertEqual(power["cycle_hold_s"], 3.0)
+        self.assertEqual(power["serial_lines"], 1)
+        self.assertEqual(observed["serial_log_exists"], [True])
+        self.assertTrue(receipt["checks"]["power_receipts"])
+
+    def test_power_receipt_failure_fails_the_phase(self):
+        receipt, _ = self._run(TOOL_OUTPUT, 0, cycle_verdict="FAIL")
+        self.assertEqual(receipt["verdict"], "FAIL")
+        self.assertIn("power_receipts", receipt["reason"])
+
+    def test_without_the_flag_the_phase_never_touches_control(self):
+        receipt, observed = self._run(TOOL_OUTPUT, 0, drop_pre_cycle=True)
+        self.assertEqual(observed["opened"], [])
+        self.assertEqual(observed["cycled"], [])
+        self.assertEqual(observed["loggers"], [])
+        self.assertNotIn("power", receipt)
+        self.assertEqual(receipt["verdict"], "PASS")
 
 
 class Csk6VersionTests(unittest.TestCase):
