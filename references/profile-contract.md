@@ -49,7 +49,7 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
 | `chip` | 目标芯片描述（`CSK7 / VenusA`、`HI3863 / WS63`） |
 | `boot.required` + `boot.method` | 需要 boot strap 时用 `control-strap` |
 | `transport` | `log_port` / `log_baud` / `burn_port` / `burn_baud` |
-| `burn.driver` | `venusa-uart` 或 `hisi-burntool`（已实现）；`csk6-batch` 未实测，measured profile 直接拒绝 |
+| `burn.driver` | `venusa-uart` / `hisi-burntool` / `csk6-uart`（已实现）；`csk6-batch` 未实测，measured profile 直接拒绝 |
 | `burn.tool` / `burn.image` | 资产 id，指向 `assets/manifest.json`，不是路径 |
 | `verify` | `version_key`、`require_keys`、`expect`、`window_s`、可选 `cross_check` |
 | `recover` | `required`、`driver`（`ftm-clear` / `power-cycle` / `none`）、`before_verify` |
@@ -60,6 +60,31 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
   `image_addr` 必须是 `0x...`；成功标记来自工具输出（`MD5 CHECK SUCCESS`、`FLASH DOWNLOAD SUCCESS`）。
 - `hisi-burntool`：`BurnTool.exe -com:<n> -bin:<file> -signalbaud:<baud> -chiptype:<id> -onlyburn:<part>...`，
   成功/失败词来自 optLog（默认 `成功`/`完成`、`失败`）。
+- `csk6-uart`：CSK6 CH344 台架的 `Uart_Burn_Tool`。默认参数与 `venusa-uart` 同族
+  （`-b <burn_baud> -p <burn_port> -f <image> -a <image_addr>`），实测参数不同时用 `burn.argv_template`
+  覆盖（占位符 `{tool}` `{baud}` `{port}` `{image}` `{addr}`）。measured profile 必须同时给出：
+  `image_addr`（`0x...`）、`success_markers`、`expected_write_bytes`（WRITE SIZE）、`expected_md5`（设备 MD5）；
+  判定 = exit 0 **且** 标记齐全 **且** WRITE SIZE 相同 **且** MD5 相同，缺一项即 FAIL
+  （`kb-knowledge-368ec0d51d2c`）。
+
+## 3.1 csk6 + hisi dev01 台架
+
+`scripts/profiles/csk6-hisi-dev01.json` 描述 win003 / win005 **共用的同一台** CSK6 + HI3863 CH344 四串口台架。
+
+- **端口逐节点识别，禁止跨节点复用**（`kb-knowledge-99ced0adc4e3`）：
+  win003 `control COM36 / csk6:log COM35 / csk6:burn COM34 / hisi COM32`；
+  win005 `control COM15 / csk6:log COM36 / csk6:burn COM37 / hisi COM39`。
+  profile 里的 COM 只是 win003 参考值，运行时必须传 `--device-snapshot`（role：`control`、`csk6:log`、
+  `csk6:burn`、`hisi:log`、`hisi:burn`），否则会把日志口当烧录口。
+- **控制**：沿用 `uut-switch1.on/off` 继电器上下电，非 tcl 族，因此必须显式 `control.allow_tcl_commands: true`
+  ——这是声明，不是从 `tcl-pvm1005` 继承时序。
+- **状态**：`draft`。写阶段一律拒绝；升级 `measured` 要补齐 `measurement_required`
+  （CSK6 工具 sha256、burn_baud、镜像地址、V40.1.11 的 WRITE SIZE/MD5、预期版本原文、HISI 分区集等）。
+- **验收口径**：7 项独立判定，整机结论取最差项（`kb-method-cad7be93134e`）；`module_only` 拓扑下约 13 s
+  周期复位记 `EXPECTED_TOPOLOGY_BEHAVIOR`，不进整机最差项。
+- **固件包**：`csk6-v40.1.11-package`（`V40.1.11_20261119094552.7z`，bytes `38827193`、
+  sha256 `b70eca75…`）目前是 `node-attachment`，`oss.download=local-only`——没有可取得位置就不编造 OSS 路径；
+  解包后的写入镜像需另登记。
 
 ## 4. 族隔离规则（加载时强制）
 

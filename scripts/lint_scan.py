@@ -85,6 +85,12 @@ def check_profiles(findings: list[str], manifest: Path) -> None:
             assets.require(profile.asset_ids())
         except Exception as exc:  # noqa: BLE001
             findings.append(f"{path.name}: {exc}")
+            continue
+        packages = [chip.package_asset for chip in profile.chips if chip.package_asset]
+        try:
+            assets.require(packages)
+        except Exception as exc:  # noqa: BLE001
+            findings.append(f"{path.name}: burn.package -> {exc}")
 
 
 def check_secrets(findings: list[str]) -> None:

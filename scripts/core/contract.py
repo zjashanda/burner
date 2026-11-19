@@ -69,7 +69,15 @@ VERSION_PATTERNS = {
     "hisi_sys_ver": re.compile(r"SYS_VER:\s*(\S+)"),
     "hisi_sdk_ver": re.compile(r"SDK_VER:\s*(\S+)"),
     "hisi_commit": re.compile(r"Commit:\s*([0-9a-f]{6,}),\s*Compiler:\s*(.+)$"),
+    # CSK6 (V40.x line) prints "venus ap appliction(V4.1.8@Nov 11 2026 12:27:56)".
+    # The device string keeps the leading "V": compare it as printed, never strip
+    # it silently (kb-knowledge-368ec0d51d2c / kb-knowledge-5b92a7b0c5d9).
+    "csk6_app": re.compile(r"venus ap appliction\(\s*(V\d+\.\d+\.\d+)"),
 }
+
+#: CSK6 boot-banner lines that must appear before a version read counts as a
+#: real startup (kb-knowledge-368ec0d51d2c: "AP Boot Ready !!!").
+CSK6_BOOT_LINES = ["AP Boot Ready"]
 ASR_FIXED = re.compile(r"use_fixed_asr\s*[:=]\s*(\d)")
 ASR_SERVER = re.compile(r"fixed_server\s*[:=]\s*(\d)")
 

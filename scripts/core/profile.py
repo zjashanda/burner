@@ -14,6 +14,11 @@ Family isolation (TCL vs Media/美的):
     a declaration, never an inheritance.
   * a draft profile may omit measured values, but it cannot be written to:
     the driver refuses write steps until ``status`` flips to ``measured``.
+
+Drivers: ``venusa-uart`` (CSK7), ``hisi-burntool`` (HI3863/WS63) and
+``csk6-uart`` (CSK6 CH344 bench, Uart_Burn_Tool) are implemented.
+``csk6-batch`` stays declared but unimplemented: the Media ``auto_burn.py``
+bench has never been measured on this node.
 """
 from __future__ import annotations
 
@@ -30,8 +35,9 @@ FAMILIES = {"tcl", "midea", "generic"}
 STATUSES = {"measured", "draft"}
 CONTROL_KINDS = {"serial-relay", "external-script", "manual"}
 BOOT_METHODS = {"control-strap"}
-DRIVERS = {"venusa-uart", "hisi-burntool", "csk6-batch"}
-IMPLEMENTED_DRIVERS = {"venusa-uart", "hisi-burntool"}
+DRIVERS = {"venusa-uart", "hisi-burntool", "csk6-uart", "csk6-batch"}
+IMPLEMENTED_DRIVERS = {"venusa-uart", "hisi-burntool", "csk6-uart"}
+MD5 = re.compile(r"^0x[0-9a-fA-F]{32}$")
 RECOVER_DRIVERS = {"ftm-clear", "power-cycle", "none"}
 CONTROL_KEYS = {"power_cut", "power_restore", "strap_on", "strap_off"}
 CHIP_ID = re.compile(r"^[a-z][a-z0-9_-]{1,23}$")
@@ -101,6 +107,10 @@ class Chip:
         else:
             self.tool_asset = str(burn["tool"]) if burn.get("tool") else None
             self.image_asset = str(burn["image"]) if burn.get("image") else None
+        # Optional archive the flash image is unpacked from (e.g. a .7z mail
+        # attachment). Metadata only: it stays out of asset_ids(), because a run
+        # needs the extracted image, not the archive.
+        self.package_asset = str(burn.get("package") or "") or None
 
         verify = _need(raw, "verify", where)
         if not isinstance(verify, dict):
@@ -148,6 +158,8 @@ class Chip:
                 raise ProfileError(f"{where}.burn.onlyburn_parts must list the partitions to write")
             if not self.burn.get("success_tokens"):
                 raise ProfileError(f"{where}.burn.success_tokens must list the optLog success words")
+        elif self.driver == "csk6-uart":
+            self._validate_csk6(where, control)
         elif self.driver == "csk6-batch":
             raise ProfileError(
                 f"{where}.burn.driver csk6-batch is declared but not implemented/verified on this node; "
@@ -162,6 +174,27 @@ class Chip:
             raise ProfileError(f"{where}.verify.expect is required for a measured profile")
         if not isinstance(self.verify.get("window_s"), (int, float)) or self.verify["window_s"] <= 0:
             raise ProfileError(f"{where}.verify.window_s must be a positive number")
+        require_lines = self.verify.get("require_lines")
+        if require_lines is not None and not (
+                isinstance(require_lines, list) and all(isinstance(item, str) and item for item in require_lines)):
+            raise ProfileError(f"{where}.verify.require_lines must be a list of non-empty strings")
+
+    def _validate_csk6(self, where: str, control: dict) -> None:
+        """CSK6 acceptance is mechanical: write size + device MD5 + markers + exit 0.
+
+        Sourced from kb-knowledge-368ec0d51d2c (WRITE SIZE, device MD5, the four
+        Uart_Burn_Tool markers). A measured profile must pin every value - there
+        is no "looks fine" fallback, and a partial match stays NEEDS_REVIEW.
+        """
+        if not ADDR.match(str(self.burn.get("image_addr") or "")):
+            raise ProfileError(f"{where}.burn.image_addr must be 0x... for csk6-uart")
+        if not self.burn.get("success_markers"):
+            raise ProfileError(f"{where}.burn.success_markers must list the tool success lines")
+        expected_bytes = self.burn.get("expected_write_bytes")
+        if not _is_int(expected_bytes) or expected_bytes <= 0:
+            raise ProfileError(f"{where}.burn.expected_write_bytes must be the measured WRITE SIZE in bytes")
+        if not MD5.match(str(self.burn.get("expected_md5") or "")):
+            raise ProfileError(f"{where}.burn.expected_md5 must be 0x + 32 hex chars for csk6-uart")
 
     @property
     def log_port(self) -> str | None:
@@ -185,6 +218,7 @@ class Chip:
                         "before_verify": self.recover_before_verify,
                         "driver": self.recover.get("driver") if self.recover_required else None},
             "verify": {"version_key": self.verify.get("version_key"), "expect": self.verify.get("expect")},
+            "package": self.package_asset,
             "assets": [asset_id for asset_id in (self.tool_asset, self.image_asset) if asset_id],
         }
 

@@ -8,10 +8,16 @@ verified tool families are implemented:
 
 ``csk6-batch`` is declared in the profile schema but refused as a write
 driver until a Media bench has been measured on this node.
+
+``csk6-uart`` drives the CSK6 CH344 bench through the same Uart_Burn_Tool
+family and grades the run mechanically: exit 0, the profile's success
+markers, the measured WRITE SIZE and the device MD5 must all agree
+(kb-knowledge-368ec0d51d2c). A partial match is FAIL, never PASS.
 """
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -60,6 +66,64 @@ def expectation_report(ctx: dict, chip, versions: dict[str, str]) -> dict[str, A
     if expected:
         report["match"] = version_matches(expected, got)
     return report
+
+
+# ---------------------------------------------------------------- csk6 helpers
+
+#: ``WRITE SIZE 5685248`` / ``WRITE SIZE: 5,685,248`` in the Uart_Burn_Tool log.
+CSK6_WRITE_SIZE = re.compile(r"WRITE\s*SIZE[^0-9]{0,16}([\d,]+)", re.I)
+#: the device MD5 the tool prints, e.g. ``0xf6d6369435d52784efe1119ebd08f582``.
+CSK6_MD5 = re.compile(r"\b(0x[0-9a-fA-F]{32})\b")
+#: default argv for the CSK6 Uart_Burn_Tool family; a profile may override it
+#: through ``burn.argv_template`` once the exact flags are measured.
+CSK6_ARGV_DEFAULT = ["-b", "{baud}", "-p", "{port}", "-f", "{image}", "-a", "{addr}"]
+
+
+def parse_write_size(text: str) -> int | None:
+    matches = CSK6_WRITE_SIZE.findall(text or "")
+    if not matches:
+        return None
+    return int(matches[-1].replace(",", ""))
+
+
+def parse_device_md5(text: str) -> str | None:
+    matches = CSK6_MD5.findall(text or "")
+    return matches[-1].lower() if matches else None
+
+
+def csk6_burn_checks(burn: dict, output: str, rc: int) -> dict[str, Any]:
+    """Grade one CSK6 flash run. Pure function: no port, no clock, no files.
+
+    Every graded item must be true. Items the profile has not pinned (``None``)
+    are not guessed - a measured profile cannot leave them unset, so this only
+    happens for a draft, which never reaches a write step.
+    """
+    markers = {marker: marker in (output or "") for marker in burn.get("success_markers") or []}
+    write_size = parse_write_size(output)
+    device_md5 = parse_device_md5(output)
+    expected_bytes = burn.get("expected_write_bytes")
+    expected_md5 = str(burn.get("expected_md5") or "").lower() or None
+    checks: dict[str, Any] = {
+        "exit_zero": rc == 0,
+        "markers": bool(markers) and all(markers.values()),
+        "write_size": None if expected_bytes is None else write_size == expected_bytes,
+        "device_md5": None if expected_md5 is None else device_md5 == expected_md5,
+    }
+    return {"markers": markers, "write_size": write_size, "device_md5": device_md5,
+            "expected_write_bytes": expected_bytes, "expected_md5": expected_md5,
+            "checks": checks, "ok": all(value for value in checks.values() if value is not None)}
+
+
+def csk6_argv(tool: Path, chip, image: Path) -> list[str]:
+    values = {"tool": str(tool), "baud": str(chip.transport["burn_baud"]),
+              "port": str(chip.transport["burn_port"]), "image": str(image),
+              "addr": str(chip.burn.get("image_addr"))}
+    template = chip.burn.get("argv_template") or CSK6_ARGV_DEFAULT
+    try:
+        args = [str(item).format(**values) for item in template]
+    except (KeyError, IndexError, ValueError) as exc:
+        raise BenchError(f"burn.argv_template has an unknown placeholder: {exc}") from exc
+    return [str(tool)] + args
 
 
 # ---------------------------------------------------------------- preflight
@@ -247,11 +311,44 @@ def _burn_hisi(ctx: dict, chip) -> dict:
     }
 
 
+def _burn_csk6(ctx: dict, chip) -> dict:
+    """CSK6 CH344 bench: Uart_Burn_Tool writes the image, then evidence decides.
+
+    Unlike ``venusa-uart`` (markers only) this grades the measured WRITE SIZE
+    and device MD5 as well, because the CSK6 acceptance criterion is exactly
+    those numbers plus the four markers plus exit 0.
+    """
+    tool = ctx["assets"].resolve(chip.tool_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
+    image = ctx["assets"].resolve(chip.image_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
+    burn = chip.burn
+    argv = csk6_argv(tool, chip, image)
+    result = run_tool(argv, Path(tool).parent, float(burn.get("timeout_s", 600)))
+    log_path = Path(ctx["run_dir"]) / "tool_logs" / f"tool_{chip.id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(result["output"], encoding="utf-8", newline="\n")
+    report = csk6_burn_checks(burn, result["output"], result["rc"])
+    failed = sorted(name for name, value in report["checks"].items() if value is not True)
+    return {
+        "chip": chip.id, "driver": chip.driver, "tool": str(tool), "tool_sha256": sha256_file(tool),
+        "image": str(image), "image_sha256": sha256_file(image), "image_addr": burn.get("image_addr"),
+        "burn_port": chip.transport["burn_port"], "burn_baud": chip.transport["burn_baud"],
+        "cmd": result["cmd"], "tool_result": {key: result[key] for key in ("cmd", "rc", "elapsed_s")},
+        "tool_log": str(log_path), "markers": report["markers"],
+        "write_size": report["write_size"], "expected_write_bytes": report["expected_write_bytes"],
+        "device_md5": report["device_md5"], "expected_md5": report["expected_md5"],
+        "checks": report["checks"],
+        "verdict": "PASS" if report["ok"] else "FAIL",
+        "reason": "" if report["ok"] else f"CSK6 burn evidence did not match: {failed}",
+    }
+
+
 def phase_burn(ctx: dict, chip) -> dict:
     if chip.driver == "venusa-uart":
         return _burn_venusa(ctx, chip)
     if chip.driver == "hisi-burntool":
         return _burn_hisi(ctx, chip)
+    if chip.driver == "csk6-uart":
+        return _burn_csk6(ctx, chip)
     raise BenchError(f"burn driver {chip.driver!r} is declared but not implemented on this node")
 
 
@@ -299,6 +396,13 @@ def phase_verify(ctx: dict, chip) -> dict:
         "expected_version": expectation.get("match", False),
         "power_cycle": captured["power_cycle"]["verdict"],
     }
+    # Boot banners that are not version fields (CSK6 prints "AP Boot Ready !!!"
+    # before the app line). Missing banner = the startup never really happened.
+    require_lines = list(chip.verify.get("require_lines") or [])
+    if require_lines:
+        log_path = Path((captured["captured"].get(chip.id) or {}).get("log", "") or ".")
+        text = read_text_any(log_path) if log_path.is_file() else ""
+        checks["missing_boot_lines"] = [line for line in require_lines if line not in text]
     cross = chip.verify.get("cross_check")
     if isinstance(cross, dict) and cross.get("source") in captured["captured"]:
         token = str(cross.get("token") or "")
@@ -309,6 +413,7 @@ def phase_verify(ctx: dict, chip) -> dict:
 
     ok = (checks["version_keys_present"] and checks["expected_version"]
           and checks["power_cycle"] == "PASS"
+          and not checks.get("missing_boot_lines", [])
           and checks.get("cross_check", {}).get("ok", True))
     return {"started_at": started, "chip": chip.id, **captured, "expectation": expectation,
             "checks": checks, "verdict": "PASS" if ok else "FAIL",
