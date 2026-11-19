@@ -1,5 +1,5 @@
 {
-  "schema": "venusahisiburner-assets/v1",
+  "schema": "burner-assets/v1",
   "description": "One tool/firmware manifest for every project profile. Tools are referenced here, never copied into a project skill.",
   "oss": {
     "provider": "ark-oss",

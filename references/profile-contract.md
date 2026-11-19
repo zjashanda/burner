@@ -7,7 +7,7 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
 
 ```json
 {
-  "schema": "venusahisiburner-profile/v1",
+  "schema": "burner-profile/v1",
   "name": "tcl-pvm1005",
   "node": "pvm1005",
   "board_family": "tcl",

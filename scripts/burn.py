@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""venusahisiburner - one burn skill for VenusA/CSK and HISI/HI3863.
+"""burner - one burn skill for VenusA/CSK and HISI/HI3863.
 
 Commands:
   plan        print the profile plan; no hardware access
@@ -259,18 +259,18 @@ def main(argv: list[str] | None = None) -> int:
                     break
         return worst
     except ProfileError as exc:
-        print(f"venusahisiburner: {exc}", file=sys.stderr)
+        print(f"burner: {exc}", file=sys.stderr)
         text = str(exc)
         guard = any(token in text for token in ("draft", "confirm-write"))
         return EXIT_GUARD if guard else EXIT_USAGE
     except DeviceSnapshotError as exc:
-        print(f"venusahisiburner: {exc}", file=sys.stderr)
+        print(f"burner: {exc}", file=sys.stderr)
         return EXIT_USAGE
     except (BenchError, StateError) as exc:
-        print(f"venusahisiburner: {exc}", file=sys.stderr)
+        print(f"burner: {exc}", file=sys.stderr)
         return EXIT_GUARD if "locked" in str(exc) or "不抢占" in str(exc) else EXIT_USAGE
     except (AssetError, FetchBlocked) as exc:
-        print(f"venusahisiburner: {exc}", file=sys.stderr)
+        print(f"burner: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
 

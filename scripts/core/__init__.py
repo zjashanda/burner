@@ -1,1 +1,1 @@
-﻿"""venusahisiburner core package."""
+﻿"""burner core package."""

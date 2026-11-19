@@ -22,11 +22,11 @@
 
 | 产物 | schema |
 |---|---|
-| profile | `venusahisiburner-profile/v1` |
-| 资产 manifest | `venusahisiburner-assets/v1` |
-| 状态文件 | `venusahisiburner-state/v1` |
-| 步骤回执 | `venusahisiburner-phase/v1` |
-| 运行回执 | `venusahisiburner-receipt/v1` |
+| profile | `burner-profile/v1` |
+| 资产 manifest | `burner-assets/v1` |
+| 状态文件 | `burner-state/v1` |
+| 步骤回执 | `burner-phase/v1` |
+| 运行回执 | `burner-receipt/v1` |
 
 ## 3. 步骤回执（`steps/<step>.json`）
 
@@ -45,7 +45,7 @@
 
 ```json
 {
-  "schema": "venusahisiburner-receipt/v1",
+  "schema": "burner-receipt/v1",
   "issue": "NOAH-44",
   "node": "pvm1005",
   "profile": {"name": "tcl-pvm1005", "sha256": "...", "status": "measured", "family": "tcl"},

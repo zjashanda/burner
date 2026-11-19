@@ -1,8 +1,8 @@
 {
   "schema": "ark.skill-index.v1",
   "skill": "burner",
-  "skill_version": "1.1.0",
-  "repo": "zjashanda/venusahisiburner",
+  "skill_version": "1.2.0",
+  "repo": "zjashanda/burner",
   "route_schema": "ark.skill-route.v1",
   "route_order": [
     "capability",
@@ -56,15 +56,15 @@
         "tool_logs/tool_*.log",
         "serial_logs/*.log",
         "reset_log.jsonl",
-        "run.receipt.json（venusahisiburner-receipt/v1）"
+        "run.receipt.json（burner-receipt/v1）"
       ],
       "preconditions": [
         "profile 为脚本内置且 status=measured",
         "资产 manifest 的 sha256/bytes 全部校验通过",
         "写阶段必须 --confirm-write",
-        "台架互斥锁空闲（%TEMP%\\venusahisburner-<node>.lock）"
+        "台架互斥锁空闲（%TEMP%\\burner-<node>.lock）"
       ],
-      "evidence_schema": "venusahisiburner-receipt/v1",
+      "evidence_schema": "burner-receipt/v1",
       "version": "1.1.0",
       "status": "active"
     },
@@ -99,7 +99,7 @@
         "fw.img 写 0x0；0x40000 是 venusa.bin 分区，不得混用",
         "preflight 读不到 CSK 版本不等于设备异常"
       ],
-      "evidence_schema": "venusahisiburner-receipt/v1",
+      "evidence_schema": "burner-receipt/v1",
       "version": "1.1.0",
       "status": "active"
     },
@@ -136,7 +136,7 @@
         "BurnTool stdout 为空是常态，成功证据在 optLog",
         "分区集 9 vs 8（多 ws63_all_nv.bin）写成功也不等于 PASS"
       ],
-      "evidence_schema": "venusahisiburner-receipt/v1",
+      "evidence_schema": "burner-receipt/v1",
       "version": "1.1.0",
       "status": "active"
     },
@@ -168,7 +168,7 @@
         "新固件必须先登记 assets/manifest.json（bytes + sha256）",
         "不得跳过 preflight 直接写"
       ],
-      "evidence_schema": "venusahisiburner-receipt/v1",
+      "evidence_schema": "burner-receipt/v1",
       "version": "1.1.0",
       "status": "active"
     },
@@ -199,7 +199,7 @@
         "只用于 BurnTool 之后把芯片从 FTM 工厂模式拉回正常启动",
         "不改写任何既有 PASS/FAIL 判定"
       ],
-      "evidence_schema": "venusahisiburner-receipt/v1",
+      "evidence_schema": "burner-receipt/v1",
       "version": "1.1.0",
       "status": "active"
     },
@@ -232,7 +232,7 @@
         "只读，不改变设备状态；不需要 --confirm-write",
         "midea-csk6 status=draft 时 preflight 返回 BLOCKED 并列出待测量项"
       ],
-      "evidence_schema": "venusahisiburner-phase/v1",
+      "evidence_schema": "burner-phase/v1",
       "version": "1.1.0",
       "status": "active"
     }

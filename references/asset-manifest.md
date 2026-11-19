@@ -7,7 +7,7 @@
 
 ```json
 {
-  "schema": "venusahisiburner-assets/v1",
+  "schema": "burner-assets/v1",
   "oss": {
     "provider": "ark-oss",
     "endpoint_env": "ARK_OSS_ENDPOINT",

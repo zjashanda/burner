@@ -1,5 +1,5 @@
 {
-  "schema": "venusahisiburner-profile/v1",
+  "schema": "burner-profile/v1",
   "name": "tcl-pvm1005",
   "node": "pvm1005",
   "board_family": "tcl",
@@ -133,7 +133,7 @@
     }
   ],
   "result": {
-    "phase_schema": "venusahisiburner-phase/v1",
-    "receipt_schema": "venusahisiburner-receipt/v1"
+    "phase_schema": "burner-phase/v1",
+    "receipt_schema": "burner-receipt/v1"
   }
 }

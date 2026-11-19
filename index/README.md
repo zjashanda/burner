@@ -1,6 +1,6 @@
 # burner/index · 烧录能力固定索引
 
-> Skill：`burner`（仓库 `zjashanda/venusahisiburner`，frontmatter name `venusahisiburner`）
+> Skill：`burner`（仓库 `zjashanda/burner`，frontmatter name `burner`）
 > Schema：`ark.skill-index.v1`（机器）/ `ark.skill-route.v1`（单条能力）
 > 维护：只加不删；改能力必须同时改 `index.json` 与 `SKILL.md` 的对应段落。
 
@@ -54,7 +54,7 @@ burner/index/manifest.json → burner/index/index.json → 选中 capability →
 ## 6. 证据
 
 - 产物：`steps/*.json`、`tool_logs/`、`serial_logs/`、`reset_log.jsonl`、`run.receipt.json`
-- 回执 schema：`venusahisiburner-receipt/v1`（长期） / `venusahisiburner-phase/v1`（单步）
+- 回执 schema：`burner-receipt/v1`（长期） / `burner-phase/v1`（单步）
 - 知识关联：`ark-kb` 条目的 `skill_ref=burner`、`capability`、`profile`、`workflow`
 
 ## 7. 新增能力的最小步骤

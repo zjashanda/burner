@@ -2,11 +2,9 @@
   "schema": "ark.skill-manifest.v1",
   "skill": "burner",
   "title": "burner · 烧录能力（唯一 canonical）",
-  "repo": "zjashanda/venusahisiburner",
-  "frontmatter_name": "venusahisiburner",
-  "aliases": [
-    "venusahisiburner"
-  ],
+  "repo": "zjashanda/burner",
+  "frontmatter_name": "burner",
+  "aliases": [],
   "role": "burn-only",
   "scope": "只负责固件写入：输入校验、芯片适配、写入 profile、分区写入、烧录结果判定、烧录过程 receipt。",
   "not_for": [
@@ -14,7 +12,7 @@
     "OTA/升级后的稳定性与上下电观察（交给 lstest）",
     "知识、方法、缺陷沉淀（交给 ark-kb）"
   ],
-  "version": "1.1.0",
+  "version": "1.2.0",
   "index": {
     "machine": "index/index.json",
     "human": "index/README.md",
@@ -28,6 +26,6 @@
     "asset_manifest": "assets/manifest.json"
   },
   "routing_contract": "agents read index/index.json first, then route capability -> skill -> chip -> project -> profile -> workflow; never guess a profile or tool",
-  "updated_at": "2026-11-19 12:34:30",
-  "updated_by": "NOAH-242"
+  "updated_at": "2026-11-19 14:00:49",
+  "updated_by": "NOAH-243"
 }
