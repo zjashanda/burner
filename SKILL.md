@@ -100,7 +100,7 @@ python scripts\burn.py all --profile ... --run-dir ... --device-snapshot role-ma
 |---|---|---|
 | `preflight` | 枚举 COM、读当前版本、校验资产 hash | `steps/preflight.json`、`serial_logs/preflight_*.log` |
 | `boot:<chip>` | 仅 `boot.required` 的芯片：断电 → boot strap → 上电 → 撤 strap | `steps/boot-*.json`、`reset_log.jsonl` |
-| `burn:<chip>` | `venusa-uart`：`Uart_Burn_Tool -b -p -f -a`；`hisi-burntool`：`BurnTool -com -bin -signalbaud -chiptype -onlyburn` + 断电上电；`csk6-uart`：`Uart_Burn_Tool` + WRITE SIZE / 设备 MD5 / 4 标记判定 | `steps/burn-*.json`、`tool_logs/tool_*.log`、BurnTool `optLog` |
+| `burn:<chip>` | `venusa-uart`：`Uart_Burn_Tool -b -p -f -a`；`hisi-burntool`：`BurnTool -com -bin -signalbaud -chiptype -onlyburn` + 断电上电；`csk6-uart`：`Uart_Burn_Tool` + WRITE SIZE / 设备 MD5 / 4 标记判定（`burn.pre_power_cycle=true` 时烧前断电上电并镜像日志口） | `steps/burn-*.json`、`tool_logs/tool_*.log`、`serial_logs/burn-*.log`、BurnTool `optLog` |
 | `verify:<chip>` | 断电上电，抓串口版本，按 `verify.expect` 判定 | `steps/verify-*.json`、`serial_logs/verify-*_*.log` |
 | `recover:<chip>` | `ftm-clear`（`AT+FTM=0`）或 `power-cycle`；`before_verify` 决定顺序 | `steps/recover-*.json` |
 | `receipt` | 汇总所有步骤 + 资产 + reset_log + 产物 SHA-256 | `run.receipt.json` |

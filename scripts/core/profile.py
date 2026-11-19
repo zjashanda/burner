@@ -101,6 +101,11 @@ class Chip:
         self.driver = str(_need(burn, "driver", f"{where}.burn"))
         if self.driver not in DRIVERS:
             raise ProfileError(f"{where}.burn.driver must be one of {sorted(DRIVERS)}, got {self.driver!r}")
+        # Applies to draft and measured alike: a string "false" must not silently
+        # turn a power cycle on (NOAH-264: the CSK6 chip was never reset into the
+        # ROM download window before the tool opened the burn port).
+        if burn.get("pre_power_cycle") is not None and not isinstance(burn.get("pre_power_cycle"), bool):
+            raise ProfileError(f"{where}.burn.pre_power_cycle must be a boolean")
         if profile_status == "measured":
             self.tool_asset = str(_need(burn, "tool", f"{where}.burn"))
             self.image_asset = str(_need(burn, "image", f"{where}.burn"))
@@ -199,6 +204,9 @@ class Chip:
             raise ProfileError(f"{where}.burn.expected_write_bytes must be the measured WRITE SIZE in bytes")
         if not MD5.match(str(self.burn.get("expected_md5") or "")):
             raise ProfileError(f"{where}.burn.expected_md5 must be 0x + 32 hex chars for csk6-uart")
+        if self.burn.get("pre_power_cycle") and str(control.get("kind")) != "serial-relay":
+            raise ProfileError(
+                f"{where}.burn.pre_power_cycle needs control.kind=serial-relay to restart the board")
 
     @property
     def log_port(self) -> str | None:

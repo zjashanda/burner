@@ -328,19 +328,59 @@ def _burn_csk6(ctx: dict, chip) -> dict:
     Unlike ``venusa-uart`` (markers only) this grades the measured WRITE SIZE
     and device MD5 as well, because the CSK6 acceptance criterion is exactly
     those numbers plus the four markers plus exit 0.
+
+    ``burn.pre_power_cycle`` (opt-in, per chip) restarts the board right before
+    the tool opens the burn port *and* mirrors the chip's log port for the whole
+    run. The 2026-11-19 NOAH-264 first bring-up showed why both matter: the tool
+    retried ``CONNECT CHIP OVERTIME`` eleven times on a board that had not been
+    power cycled into the ROM download window, and the 6 s preflight window
+    captured zero log bytes, so the receipt could not tell "board unpowered"
+    from "wrong port". Without the flag the phase behaves exactly as before.
     """
     tool = ctx["assets"].resolve(chip.tool_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
     image = ctx["assets"].resolve(chip.image_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
     check_run_pins(ctx["profile"], ctx.get("commissioning"), chip, tool, image)
     burn = chip.burn
     argv = csk6_argv(tool, chip, image)
-    result = run_tool(argv, Path(tool).parent, float(burn.get("timeout_s", 600)))
+
+    pre_cycle = bool(burn.get("pre_power_cycle"))
+    logger = None
+    power: dict[str, Any] = {"pre_power_cycle": pre_cycle}
+    if pre_cycle:
+        if chip.log_port:
+            serial_log = Path(ctx["run_dir"]) / "serial_logs" / f"burn-{chip.id}.log"
+            logger = PortLogger(chip.log_port, int(chip.log_baud), serial_log)
+            logger.start()
+        handle = open_control(ctx["profile"])
+        try:
+            power["cycle"] = power_cycle(handle, ctx["profile"], f"burn:{chip.id}", ctx["audit"])
+        finally:
+            handle.close()
+
+    try:
+        result = run_tool(argv, Path(tool).parent, float(burn.get("timeout_s", 600)))
+    finally:
+        if logger is not None:
+            logger.stop_event.set()
+            time.sleep(0.8)
+
     log_path = Path(ctx["run_dir"]) / "tool_logs" / f"tool_{chip.id}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_path.write_text(result["output"], encoding="utf-8", newline="\n")
     report = csk6_burn_checks(burn, result["output"], result["rc"])
-    failed = sorted(name for name, value in report["checks"].items() if value is not True)
-    return {
+    checks = dict(report["checks"])
+    if pre_cycle:
+        cycle = power.get("cycle") or {}
+        power["cycle_hold_s"] = (ctx["profile"].control.get("timing") or {}).get("cycle_hold_s")
+        if logger is not None:
+            power["serial_log"] = str(logger.log_path)
+            power["serial_bytes"] = logger.bytes
+            power["serial_lines"] = len(logger.lines)
+            power["serial_error"] = logger.error
+        checks["power_receipts"] = cycle.get("verdict") == "PASS"
+    failed = sorted(name for name, value in checks.items() if value is not True)
+    ok = all(value for value in checks.values() if value is not None)
+    receipt = {
         "chip": chip.id, "driver": chip.driver, "tool": str(tool), "tool_sha256": sha256_file(tool),
         "image": str(image), "image_sha256": sha256_file(image), "image_addr": burn.get("image_addr"),
         "burn_port": chip.transport["burn_port"], "burn_baud": chip.transport["burn_baud"],
@@ -348,10 +388,13 @@ def _burn_csk6(ctx: dict, chip) -> dict:
         "tool_log": str(log_path), "markers": report["markers"],
         "write_size": report["write_size"], "expected_write_bytes": report["expected_write_bytes"],
         "device_md5": report["device_md5"], "expected_md5": report["expected_md5"],
-        "checks": report["checks"],
-        "verdict": "PASS" if report["ok"] else "FAIL",
-        "reason": "" if report["ok"] else f"CSK6 burn evidence did not match: {failed}",
+        "checks": checks,
+        "verdict": "PASS" if ok else "FAIL",
+        "reason": "" if ok else f"CSK6 burn evidence did not match: {failed}",
     }
+    if pre_cycle:
+        receipt["power"] = power
+    return receipt
 
 
 def phase_burn(ctx: dict, chip) -> dict:
