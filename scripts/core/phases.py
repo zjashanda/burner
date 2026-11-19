@@ -132,7 +132,7 @@ def csk6_argv(tool: Path, chip, image: Path) -> list[str]:
 def phase_preflight(ctx: dict) -> dict:
     profile = ctx["profile"]
     started = now_bj()
-    if not profile.measured:
+    if not profile.measured and not ctx.get("commissioning"):
         report: dict[str, Any] = {
             "started_at": started, "verdict": "BLOCKED",
             "reason": "profile is draft: measure the bench first",
@@ -388,12 +388,15 @@ def phase_verify(ctx: dict, chip) -> dict:
     versions = captured["versions"]
     require_keys = list(chip.verify.get("require_keys") or [])
     missing_keys = [key for key in require_keys if not versions.get(key)]
+    # A commissioning run measures the banner; it cannot match it yet, because
+    # the value it is measuring is exactly the one still missing from the draft.
+    measurement_mode = bool(ctx.get("commissioning")) and not str(chip.verify.get("expect") or "").strip()
     expectation = expectation_report(ctx, chip, versions)
 
     checks: dict[str, Any] = {
         "version_keys_present": not missing_keys,
         "missing_keys": missing_keys,
-        "expected_version": expectation.get("match", False),
+        "expected_version": None if measurement_mode else expectation.get("match", False),
         "power_cycle": captured["power_cycle"]["verdict"],
     }
     # Boot banners that are not version fields (CSK6 prints "AP Boot Ready !!!"
@@ -411,11 +414,12 @@ def phase_verify(ctx: dict, chip) -> dict:
         text = source_log.read_text(encoding="utf-8", errors="replace") if source_log.is_file() else "\n".join(lines)
         checks["cross_check"] = {"source": cross["source"], "token": token, "ok": bool(token) and token in text}
 
-    ok = (checks["version_keys_present"] and checks["expected_version"]
+    ok = (checks["version_keys_present"] and (checks["expected_version"] is None or checks["expected_version"])
           and checks["power_cycle"] == "PASS"
           and not checks.get("missing_boot_lines", [])
           and checks.get("cross_check", {}).get("ok", True))
     return {"started_at": started, "chip": chip.id, **captured, "expectation": expectation,
+            "window_s": window, "measurement_mode": measurement_mode,
             "checks": checks, "verdict": "PASS" if ok else "FAIL",
             "reason": "" if ok else "version/boot checks did not match the expected baseline"}
 

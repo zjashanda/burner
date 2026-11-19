@@ -279,12 +279,22 @@ class Profile:
             if unknown:
                 raise ProfileError(f"control.commands has unknown keys: {sorted(unknown)}")
             if raw["status"] == "measured":
+                strap_needed = any(
+                    bool((chip or {}).get("boot", {}).get("required"))
+                    for chip in raw["chips"] if isinstance(chip, dict))
                 timing = _need(control, "timing", "control")
-                for key in ("cut_to_strap_s", "strap_to_restore_s", "restore_to_strap_off_s", "cycle_hold_s"):
+                keys = ("cut_to_strap_s", "strap_to_restore_s", "restore_to_strap_off_s", "cycle_hold_s") \
+                    if strap_needed else ("cycle_hold_s",)
+                for key in keys:
                     if not isinstance(timing.get(key), (int, float)) or timing[key] < 0:
                         raise ProfileError(f"control.timing.{key} must be a non-negative number")
 
         self._validate_isolation(raw, control, commands)
+
+        # A first bring-up run on an unmeasured bench is only reachable through
+        # an explicit, human-approved commission block; see core/commission.py.
+        from .commission import validate_block  # noqa: PLC0415 - avoids a cycle
+        self.commissioning: dict | None = validate_block(raw, str(raw["status"]))
 
         chips_raw = raw["chips"]
         if not isinstance(chips_raw, list) or not chips_raw:
