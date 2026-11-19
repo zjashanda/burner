@@ -50,7 +50,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def default_lock_path(node: str) -> Path:
-    return Path(tempfile.gettempdir()) / f"venusahisburner-{node}.lock"
+    return Path(tempfile.gettempdir()) / f"burner-{node}.lock"
 
 
 class BenchLock:
@@ -263,4 +263,4 @@ def run_tool(argv: list[str], cwd: Path, timeout_s: float) -> dict:
 
 
 def stderr(message: str) -> None:
-    print(f"venusahisiburner: {message}", file=sys.stderr)
+    print(f"burner: {message}", file=sys.stderr)

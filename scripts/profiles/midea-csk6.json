@@ -1,5 +1,5 @@
 {
-  "schema": "venusahisiburner-profile/v1",
+  "schema": "burner-profile/v1",
   "name": "midea-csk6",
   "node": "pvm1005",
   "board_family": "midea",

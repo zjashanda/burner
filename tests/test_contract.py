@@ -9,8 +9,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-from core.contract import (classify_asr, is_bj_timestamp, now_bj, parse_bj,  # noqa: E402
-                           parse_versions, sha256_file, sha256_text)
+from core.contract import (SCHEMAS, classify_asr, is_bj_timestamp, now_bj,  # noqa: E402
+                           parse_bj, parse_versions, schema_matches, sha256_file,
+                           sha256_text)
 
 
 class TimeContractTests(unittest.TestCase):
@@ -83,3 +84,17 @@ class VersionParsingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaMigrationTests(unittest.TestCase):
+    def test_canonical_schema_matches(self):
+        self.assertTrue(schema_matches(SCHEMAS["state"], "state"))
+
+    def test_retired_prefix_state_file_is_still_readable(self):
+        legacy = "legacy-" + SCHEMAS["state"].split("-", 1)[1]
+        self.assertTrue(schema_matches(legacy, "state"))
+
+    def test_other_kind_or_version_is_refused(self):
+        self.assertFalse(schema_matches("anyprofile/v2", "state"))
+        self.assertFalse(schema_matches(SCHEMAS["receipt"], "state"))
+        self.assertFalse(schema_matches(None, "state"))

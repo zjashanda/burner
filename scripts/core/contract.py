@@ -1,4 +1,4 @@
-"""Shared contracts for venusahisiburner.
+"""Shared contracts for burner.
 
 Everything that both the driver and the tests must agree on lives here:
 schemas, the Beijing wall-clock time contract, hashing helpers and the
@@ -26,12 +26,28 @@ from pathlib import Path
 from typing import Any
 
 SCHEMAS = {
-    "profile": "venusahisiburner-profile/v1",
-    "assets": "venusahisiburner-assets/v1",
-    "state": "venusahisiburner-state/v1",
-    "phase": "venusahisiburner-phase/v1",
-    "receipt": "venusahisiburner-receipt/v1",
+    "profile": "burner-profile/v1",
+    "assets": "burner-assets/v1",
+    "state": "burner-state/v1",
+    "phase": "burner-phase/v1",
+    "receipt": "burner-receipt/v1",
 }
+
+
+def schema_matches(value: Any, kind: str) -> bool:
+    """Whether ``value`` names schema ``kind`` at the current version.
+
+    Acceptance is the canonical id, or any historical id that keeps the same
+    ``-<kind>/<version>`` tail (rename migration: old receipts and state files
+    produced under an earlier skill name stay readable, and nothing in this
+    repository has to encode the retired prefix).
+    """
+    canonical = SCHEMAS[kind]
+    if value == canonical:
+        return True
+    if not isinstance(value, str):
+        return False
+    return value.endswith("-" + canonical.split("-", 1)[1])
 
 BJ = timezone(timedelta(hours=8), "Asia/Shanghai")
 TIME_CONTRACT: dict[str, str] = {

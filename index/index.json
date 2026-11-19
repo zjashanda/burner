@@ -1,0 +1,453 @@
+{
+  "schema": "ark.skill-index.v1",
+  "skill": "burner",
+  "skill_version": "1.2.0",
+  "repo": "zjashanda/burner",
+  "route_schema": "ark.skill-route.v1",
+  "route_order": [
+    "capability",
+    "skill",
+    "chip",
+    "project",
+    "profile",
+    "workflow",
+    "preconditions",
+    "execute",
+    "evidence",
+    "ark-kb"
+  ],
+  "entry": {
+    "cli": "scripts/burn.py",
+    "subcommands": [
+      "plan",
+      "preflight",
+      "step",
+      "all",
+      "receipt"
+    ],
+    "install": "无第三方依赖（仓库不含 requirements.txt）；Python 3.10+",
+    "doc": "SKILL.md"
+  },
+  "capabilities": [
+    {
+      "capability_id": "burn.tcl-dual-baseline",
+      "skill": "burner",
+      "module": "burn",
+      "chip": [
+        "venusa",
+        "hisi"
+      ],
+      "project": [
+        "tcl-pvm1005"
+      ],
+      "firmware_family": [
+        "tcl-csk7-v0.0.41",
+        "hisi-ws63-v8-h363t20-wfmv206.111.1.16"
+      ],
+      "profile": "tcl-pvm1005",
+      "workflow": "wf.burn.tcl-dual-baseline",
+      "inputs": [
+        "profile: scripts/profiles/tcl-pvm1005.json",
+        "material-dir（fw.img + HISI bin）或 --asset-cache",
+        "可选 --device-snapshot（ark.device-role-map.v1 / ark.device-io.v1）"
+      ],
+      "outputs": [
+        "steps/*.json（phase receipts）",
+        "tool_logs/tool_*.log",
+        "serial_logs/*.log",
+        "reset_log.jsonl",
+        "run.receipt.json（burner-receipt/v1）"
+      ],
+      "preconditions": [
+        "profile 为脚本内置且 status=measured",
+        "资产 manifest 的 sha256/bytes 全部校验通过",
+        "写阶段必须 --confirm-write",
+        "台架互斥锁空闲（%TEMP%\\burner-<node>.lock）"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "burn.single-chip-venusa",
+      "skill": "burner",
+      "module": "burn",
+      "chip": [
+        "venusa"
+      ],
+      "project": [
+        "tcl-pvm1005"
+      ],
+      "firmware_family": [
+        "tcl-csk7-v0.0.41"
+      ],
+      "profile": "tcl-pvm1005",
+      "workflow": "wf.burn.single-venusa",
+      "inputs": [
+        "profile: tcl-pvm1005",
+        "fw.img（16 MiB 全镜像）"
+      ],
+      "outputs": [
+        "steps/preflight.json",
+        "steps/boot-venusa.json",
+        "steps/burn-venusa.json",
+        "steps/verify-venusa.json",
+        "run.receipt.json"
+      ],
+      "preconditions": [
+        "boot:venusa 需要 uut-csk-boot strap（tcl-pvm1005）",
+        "fw.img 写 0x0；0x40000 是 venusa.bin 分区，不得混用",
+        "preflight 读不到 CSK 版本不等于设备异常"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "burn.single-chip-hisi",
+      "skill": "burner",
+      "module": "burn",
+      "chip": [
+        "hisi"
+      ],
+      "project": [
+        "tcl-pvm1005"
+      ],
+      "firmware_family": [
+        "hisi-ws63-v8-h363t20-wfmv206.111.1.16"
+      ],
+      "profile": "tcl-pvm1005",
+      "workflow": "wf.burn.single-hisi",
+      "inputs": [
+        "profile: tcl-pvm1005",
+        "HISI bin（V8-H363T20-WFMV206.111.1.16.bin）",
+        "BurnTool_Gold（hisi-burntool-gold，含同目录 DLL）"
+      ],
+      "outputs": [
+        "steps/burn-hisi.json",
+        "tool_logs/tool_*.log",
+        "BurnTool_Gold/optLog/optLog_*.txt",
+        "steps/recover-hisi.json",
+        "run.receipt.json"
+      ],
+      "preconditions": [
+        "显式 -com:<burn_port>、-chiptype:13，不直接跑包内 bat",
+        "烧后必须先 recover:hisi（AT+FTM=0 @115200）再按 921600 读版本",
+        "BurnTool stdout 为空是常态，成功证据在 optLog",
+        "分区集 9 vs 8（多 ws63_all_nv.bin）写成功也不等于 PASS"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "burn.version-swap-verify",
+      "skill": "burner",
+      "module": "verify",
+      "chip": [
+        "venusa",
+        "hisi"
+      ],
+      "project": [
+        "tcl-pvm1005"
+      ],
+      "firmware_family": [
+        "any-registered"
+      ],
+      "profile": "tcl-pvm1005",
+      "workflow": "wf.burn.version-swap",
+      "inputs": [
+        "profile: tcl-pvm1005（可临时 --expect 覆盖）",
+        "新固件与注册后的资产 manifest 记录"
+      ],
+      "outputs": [
+        "steps/verify-*.json（versions_after）",
+        "run.receipt.json"
+      ],
+      "preconditions": [
+        "新固件必须先登记 assets/manifest.json（bytes + sha256）",
+        "不得跳过 preflight 直接写"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "burn.recover-ftm-clear",
+      "skill": "burner",
+      "module": "recover",
+      "chip": [
+        "hisi"
+      ],
+      "project": [
+        "tcl-pvm1005"
+      ],
+      "firmware_family": [
+        "hisi-ws63"
+      ],
+      "profile": "tcl-pvm1005",
+      "workflow": "wf.burn.recover-only",
+      "inputs": [
+        "profile: tcl-pvm1005",
+        "串口（log_port @115200）"
+      ],
+      "outputs": [
+        "steps/recover-hisi.json",
+        "serial_logs/recover-*.log"
+      ],
+      "preconditions": [
+        "只用于 BurnTool 之后把芯片从 FTM 工厂模式拉回正常启动",
+        "不改写任何既有 PASS/FAIL 判定"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.1.0",
+      "status": "active"
+    },
+    {
+      "capability_id": "burn.port-asset-preflight",
+      "skill": "burner",
+      "module": "preflight",
+      "chip": [
+        "venusa",
+        "hisi"
+      ],
+      "project": [
+        "tcl-pvm1005",
+        "midea-csk6"
+      ],
+      "firmware_family": [
+        "any-registered"
+      ],
+      "profile": "tcl-pvm1005 | midea-csk6",
+      "workflow": "wf.burn.preflight-only",
+      "inputs": [
+        "profile（必填）",
+        "可选 --device-snapshot"
+      ],
+      "outputs": [
+        "steps/preflight.json（ports / missing_ports / assets）",
+        "serial_logs/preflight_*.log"
+      ],
+      "preconditions": [
+        "只读，不改变设备状态；不需要 --confirm-write",
+        "midea-csk6 status=draft 时 preflight 返回 BLOCKED 并列出待测量项"
+      ],
+      "evidence_schema": "burner-phase/v1",
+      "version": "1.1.0",
+      "status": "active"
+    }
+  ],
+  "chips": [
+    {
+      "chip_id": "venusa",
+      "name": "CSK7 / VenusA",
+      "driver": "venusa-uart",
+      "boot_required": true,
+      "tool": "csk-uart-burn-tool",
+      "profiles": [
+        "tcl-pvm1005"
+      ]
+    },
+    {
+      "chip_id": "hisi",
+      "name": "HI3863 / WS63",
+      "driver": "hisi-burntool",
+      "boot_required": false,
+      "tool": "hisi-burntool-gold",
+      "chip_type": "13",
+      "profiles": [
+        "tcl-pvm1005"
+      ]
+    },
+    {
+      "chip_id": "csk6",
+      "name": "CSK6 / VenusA (Midea)",
+      "driver": "csk6-batch",
+      "boot_required": false,
+      "tool": "CSK6_Burn.bat（未登记 SHA-256）",
+      "profiles": [
+        "midea-csk6"
+      ],
+      "status": "draft"
+    }
+  ],
+  "projects": [
+    {
+      "project_id": "tcl-pvm1005",
+      "board": "TCL-CSK7-HI3863",
+      "node": "pvm1005",
+      "board_family": "tcl",
+      "profile": "scripts/profiles/tcl-pvm1005.json",
+      "profile_status": "measured",
+      "verified_on": "2026-11-10",
+      "verified_by": "NOAH-44 / NOAH-39 / NOAH-37",
+      "capabilities": [
+        "burn.tcl-dual-baseline",
+        "burn.single-chip-venusa",
+        "burn.single-chip-hisi",
+        "burn.version-swap-verify",
+        "burn.recover-ftm-clear",
+        "burn.port-asset-preflight"
+      ]
+    },
+    {
+      "project_id": "midea-csk6",
+      "board": "Midea CSK6 voice board (Linepad/Home firmware family)",
+      "node": "pvm1005",
+      "board_family": "midea",
+      "profile": "scripts/profiles/midea-csk6.json",
+      "profile_status": "draft",
+      "verified_on": null,
+      "verified_by": null,
+      "capabilities": [
+        "burn.port-asset-preflight"
+      ],
+      "blocked_reason": "draft profile 只允许 plan/preflight；写阶段一律拒绝，待测量项见 measurement_required"
+    }
+  ],
+  "firmware_profiles": [
+    {
+      "firmware_id": "tcl-csk7-v0.0.41",
+      "chip": "venusa",
+      "version": "V0.0.41",
+      "file": "fw.img",
+      "bytes": 16777216,
+      "sha256": "e2515c52a17140d04b2f3220f00506c2d860515d0217bbbb0c4c41430c84a028",
+      "write_addr": "0x0",
+      "note": "16 MiB 全镜像；0x40000 是 venusa.bin 的分区地址"
+    },
+    {
+      "firmware_id": "hisi-ws63-v8-h363t20-wfmv206.111.1.16",
+      "chip": "hisi",
+      "version": "V8-H363T20-WFMV206.111.1.16",
+      "file": "V8-H363T20-WFMV206.111.1.16.bin",
+      "bytes": 3694352,
+      "sha256": "ed2eaf013cc761ede525704a0cae3ccca4bbaf9e6f78cf99f45af7e6bf7927f4",
+      "write_addr": "由 BurnTool -onlyburn 分区集决定",
+      "note": "分区集 9 vs 8 会影响 PASS 判定，见 ark-kb kb-knowledge-5f25b39ebe82"
+    }
+  ],
+  "tools": [
+    {
+      "tool_id": "csk-uart-burn-tool",
+      "version": "1.0.10",
+      "file": "Uart_Burn_Tool.exe",
+      "sha256": "56aefe470dd40afe572e652e6560bc252643728c1dbd4d2f63daf4582f88001e",
+      "chip": "venusa",
+      "install": "assets/manifest.json → install.material_rel / cache_rel"
+    },
+    {
+      "tool_id": "hisi-burntool-gold",
+      "version": "unversioned-20261027",
+      "file": "BurnTool.exe",
+      "sha256": "4bd51bc3ee3e32c8da50698bb92b80a63f631dfa1d9cb1a412a1a5b4ba21cc0f",
+      "chip": "hisi",
+      "install": "assets/manifest.json；需同目录 DLL"
+    }
+  ],
+  "workflows": [
+    {
+      "workflow_id": "wf.burn.tcl-dual-baseline",
+      "steps": [
+        "preflight",
+        "boot:venusa",
+        "burn:venusa",
+        "verify:venusa",
+        "burn:hisi",
+        "recover:hisi",
+        "verify:hisi",
+        "receipt"
+      ],
+      "entry": "python scripts/burn.py all --profile scripts/profiles/tcl-pvm1005.json --run-dir <dir> --material-dir <dir> --confirm-write",
+      "note": "严格串行；任一步 FAIL/BLOCKED 即停，执行 safe_recover 并写 FAIL 回执"
+    },
+    {
+      "workflow_id": "wf.burn.single-venusa",
+      "steps": [
+        "preflight",
+        "boot:venusa",
+        "burn:venusa",
+        "verify:venusa",
+        "receipt"
+      ],
+      "entry": "python scripts/burn.py step <step> --profile scripts/profiles/tcl-pvm1005.json --run-dir <dir> --confirm-write",
+      "note": "仓库当前没有单芯片 profile；单芯片按 step 顺序逐条执行（每步要求前序 PASS），收尾跑 receipt"
+    },
+    {
+      "workflow_id": "wf.burn.single-hisi",
+      "steps": [
+        "preflight",
+        "burn:hisi",
+        "recover:hisi",
+        "verify:hisi",
+        "receipt"
+      ],
+      "entry": "python scripts/burn.py step <step> --profile scripts/profiles/tcl-pvm1005.json --run-dir <dir> --confirm-write",
+      "note": "同上；recover:hisi 必须夹在 burn:hisi 与 verify:hisi 之间"
+    },
+    {
+      "workflow_id": "wf.burn.version-swap",
+      "steps": [
+        "preflight",
+        "burn:<chip>",
+        "verify:<chip>",
+        "receipt"
+      ],
+      "entry": "python scripts/burn.py all --profile ... --expect venusa=<ver> --expect hisi=<ver> --confirm-write",
+      "note": "改期望值比改 profile 更安全；profile 不继承"
+    },
+    {
+      "workflow_id": "wf.burn.recover-only",
+      "steps": [
+        "recover:hisi"
+      ],
+      "entry": "python scripts/burn.py step recover:hisi --profile ... --run-dir <dir> --confirm-write"
+    },
+    {
+      "workflow_id": "wf.burn.preflight-only",
+      "steps": [
+        "preflight"
+      ],
+      "entry": "python scripts/burn.py preflight --profile ... --run-dir <dir>"
+    }
+  ],
+  "compatibility": [
+    {
+      "profile": "tcl-pvm1005",
+      "chip": "venusa",
+      "tool": "csk-uart-burn-tool@1.0.10",
+      "firmware": "tcl-csk7-v0.0.41",
+      "status": "measured",
+      "evidence": "NOAH-44 baseline；ark-kb kb-run-3d971a515eae / kb-run-3bb39adcf103"
+    },
+    {
+      "profile": "tcl-pvm1005",
+      "chip": "hisi",
+      "tool": "hisi-burntool-gold@unversioned-20261027",
+      "firmware": "hisi-ws63-v8-h363t20-wfmv206.111.1.16",
+      "status": "measured",
+      "evidence": "NOAH-44 baseline；HISI 仅模组拓扑复位属预期行为（kb-knowledge-84602a2f32dc）"
+    },
+    {
+      "profile": "midea-csk6",
+      "chip": "csk6",
+      "tool": "CSK6_Burn.bat（未注册）",
+      "firmware": "未注册",
+      "status": "draft",
+      "evidence": "profile.measurement_required 未完成；写阶段禁止"
+    }
+  ],
+  "task_dir_contract": {
+    "burner_provides": [
+      "steps/",
+      "tool_logs/",
+      "serial_logs/",
+      "reset_log.jsonl",
+      "run.receipt.json"
+    ],
+    "task_dir_owner": "lstest",
+    "note": "burner 只写烧录产物，不负责建整套任务目录"
+  },
+  "updated_at": "2026-11-19 12:34:30",
+  "updated_by": "NOAH-242"
+}

@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .contract import SCHEMAS, now_bj, write_json
+from .contract import SCHEMAS, now_bj, schema_matches, write_json
 
 PREFLIGHT = "preflight"
 RECEIPT = "receipt"
@@ -62,7 +62,7 @@ class RunState:
                 self.data = json.loads(self.path.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 raise StateError(f"state file is corrupt: {self.path}: {exc}") from exc
-            if self.data.get("schema") != SCHEMAS["state"]:
+            if not schema_matches(self.data.get("schema"), "state"):
                 raise StateError(f"state schema mismatch in {self.path}: {self.data.get('schema')!r}")
 
     def done(self, step: str) -> bool:

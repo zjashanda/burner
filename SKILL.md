@@ -1,9 +1,9 @@
 ---
-name: venusahisiburner
+name: burner
 description: VenusA/CSK 与 HISI/HI3863 双芯片统一烧录 Skill。按 profile 执行 preflight → boot → burn → verify → recover → receipt，统一资产 manifest（OSS 路径 + SHA-256）、北京时间无时区时间契约、dry-run / confirm-write / 硬件互斥锁；TCL 与 Media（美的）profile 严格隔离。用于台架固件烧录、已知基线回归和换版本验证。
 ---
 
-# venusahisiburner
+# burner
 
 一套 Skill 覆盖两种芯片的烧录：**VenusA/CSK（fw.img 全镜像）** 与 **HISI/HI3863（WS63 BurnTool）**。
 不再按项目复制烧录 Skill——项目差异只写在 profile，工具与固件只登记在统一资产 manifest。
@@ -23,7 +23,7 @@ description: VenusA/CSK 与 HISI/HI3863 双芯片统一烧录 Skill。按 profil
 3. **profile 不继承**：`inherits` / `extends` / `defaults_from` / `$ref` 在加载时直接拒绝；每个 profile 自己写全。
 4. **族隔离**：`board_family: tcl` 必须显式禁用 `uut-reset` / `uut-csk-reset` / `uut-burn`；其他族使用 `uut-*` 必须显式写 `control.allow_tcl_commands: true`。
 5. **draft profile 不能写**：`status: draft` 只允许 `plan` / dry-run / preflight（preflight 返回 BLOCKED 并列出待测量项）。
-6. **一台台架同时只允许一个烧录进程**：任何硬件阶段先抢 `%TEMP%\venusahisburner-<node>.lock`；被活进程持有时退出码 3，不杀进程、不抢端口。
+6. **一台台架同时只允许一个烧录进程**：任何硬件阶段先抢 `%TEMP%\burner-<node>.lock`；被活进程持有时退出码 3，不杀进程、不抢端口。
 7. **每步先落盘再判定**：step receipt + 工具日志 + 串口原始日志 + `reset_log.jsonl`；判定顺序 BLOCKED / FAIL / PASS。
 8. **时间只写北京时间、不带时区**：`YYYY-MM-DD HH:MM:SS`（空格分隔、秒级）；`T`、小数秒、`+08:00`、`Z`、RFC3339 都是违约；设备原始时间只能原样进 `raw_*` 字段（见 `references/result-contract.md`）。
 9. **凭据只来自环境变量**：Skill / manifest / 日志 / 回执里出现 token、密码、私钥即加载失败。

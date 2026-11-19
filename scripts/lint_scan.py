@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local skill-git lint/scan gate for venusahisiburner.
+"""Local skill-git lint/scan gate for burner.
 
 Checks (no hardware, no network):
   1. SKILL.md frontmatter: name/description present, name matches the repo dir.
@@ -102,7 +102,7 @@ def check_compile(findings: list[str]) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="venusahisiburner lint/scan")
+    parser = argparse.ArgumentParser(description="burner lint/scan")
     parser.add_argument("--strict", action="store_true", help="exit 1 on findings")
     args = parser.parse_args(argv)
 

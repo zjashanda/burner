@@ -21,7 +21,7 @@ MANIFEST = ROOT / "assets" / "manifest.json"
 def base_manifest(tmp: Path, payload: bytes = b"tool-bytes") -> dict:
     sha = sha256_text(payload.decode())
     return {
-        "schema": "venusahisiburner-assets/v1",
+        "schema": "burner-assets/v1",
         "oss": {
             "provider": "ark-oss", "endpoint_env": "ARK_OSS_ENDPOINT", "bucket_env": "ARK_OSS_BUCKET",
             "credential": {"mode": "env-only", "access_key_env": "ARK_OSS_ACCESS_KEY_ID",
