@@ -44,10 +44,12 @@ burner/index/manifest.json → burner/index/index.json → 选中 capability →
 
 `midea-csk6` 只有 `burn.port-asset-preflight`：profile 是 `draft`，写阶段一律拒绝。
 
-`csk6-hisi-dev01` 的写驱动 `csk6-uart` 已实现并有单测，但 profile 仍是 `draft`：
-写阶段拒绝，只允许 `plan` / `preflight`；升级 `measured` 必须由节点实测证据驱动
-（WRITE SIZE、设备 MD5、逐节点端口映射、启动版本原文）。判定拆成 7 项独立判定，
-整机结论取最差项（`kb-method-cad7be93134e`）。
+`csk6-hisi-dev01` 的写驱动 `csk6-uart` 已实现并有单测，profile 仍是 `draft`：
+普通写阶段拒绝，只允许 `plan` / `preflight`；唯一例外是 `commissioning` 块批准的**受控首跑**
+（`all --commission <ref> --node <approved node> --confirm-write`，钉住单设备与每个 tool/image 的 sha256，
+同一 approval 只写一次、不重试，预门禁失败即设备零动作）。首跑回执 `commissioning.receipt.json`
+经 `promote` 生成 measured profile，写后字段（WRITE SIZE、设备 MD5、启动横幅、HISI signal_baud）不手填。
+判定拆成 7 项独立判定，整机结论取最差项（`kb-method-cad7be93134e`）。
 
 ## 5. 前置检查（任何写阶段之前）
 

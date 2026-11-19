@@ -37,6 +37,33 @@
       }
     },
     {
+      "id": "csk6-uart-burn-tool-v1.0.5",
+      "kind": "tool",
+      "target_chip": "CSK6/VenusA",
+      "version": "v1.0.5",
+      "file": "Uart_Burn_Tool.exe",
+      "bytes": 83968,
+      "sha256": "4bfdf6800b32dc9fa7ed5e17f039dc1ea4a7f049c25acfc98f83e3dcfcf197bb",
+      "oss": {
+        "key": "pending-upload/csk6-uart-burn-tool/1.0.5/Uart_Burn_Tool.exe",
+        "object": "Uart_Burn_Tool.exe",
+        "download": "local-only",
+        "pending_upload": true,
+        "note": "随 V40.1.11 固件包分发，节点侧解包即得；尚未上传 8090/OSS，不构造猜测 URL"
+      },
+      "install": {
+        "material_rel": "csk6/V40.1.11_20261119094552/CSK/Uart_Burn_Tool.exe",
+        "cache_rel": "tools/csk6/uart-burn-tool/1.0.5/Uart_Burn_Tool.exe"
+      },
+      "provenance": {
+        "source": "V40.1.11_20261119094552.7z!CSK/Uart_Burn_Tool.exe（固件包内绑定变体）",
+        "issue": "NOAH-260",
+        "node": "win003",
+        "version_string": "version: v1.0.5, build time = 2025-03-06_16:04:23",
+        "note": "与 csk-uart-burn-tool（1.0.10，10892822 B，sha256 56aefe47…）是两个不同资产：不覆盖、不复用 sha256、不伪装成同一文件；CSK6 台架只用本变体"
+      }
+    },
+    {
       "id": "hisi-burntool-gold",
       "kind": "tool",
       "target_chip": "HI3863/WS63",
@@ -123,10 +150,60 @@
         "source": "node-attachment",
         "node": "win003",
         "issue": "NOAH-241",
-        "note": "win003 实测 bytes 38827193 + sha256；7z 是分发包，解包后写入镜像的 file/bytes/sha256 需实测后另登记"
+        "note": "win003 实测 bytes 38827193 + sha256；7z 是分发包，解包后的写入镜像已另登记 csk6-v40.1.11-fw-img / hisi-ws63-v40.1.11-all-fwpkg（NOAH-260 解包实测）"
+      }
+    },
+    {
+      "id": "csk6-v40.1.11-fw-img",
+      "kind": "firmware",
+      "target_chip": "CSK6/VenusA",
+      "version": "V40.1.11",
+      "file": "fw.img",
+      "bytes": 16777216,
+      "sha256": "db0a618d570bcf258a47a011de735d25dcb2745c30bd741a73a25b7ff0362f6d",
+      "oss": {
+        "key": "pending-upload/csk6-v40.1.11/fw.img",
+        "object": "fw.img",
+        "download": "local-only",
+        "pending_upload": true,
+        "note": "由 csk6-v40.1.11-package 解包得到（CSK/fw.img）；尚未上传 8090，不构造猜测 URL"
+      },
+      "install": {
+        "material_rel": "csk6/V40.1.11_20261119094552/CSK/fw.img"
+      },
+      "provenance": {
+        "source": "V40.1.11_20261119094552.7z!CSK/fw.img",
+        "issue": "NOAH-260",
+        "node": "win003",
+        "note": "16 MiB 全镜像，写 0x000000；包内 CSK6_Burn.bat 的 BOOT_ADDR=0x000000"
+      }
+    },
+    {
+      "id": "hisi-ws63-v40.1.11-all-fwpkg",
+      "kind": "firmware",
+      "target_chip": "HI3863/WS63",
+      "version": "V40.1.11",
+      "file": "ws63-liteos-app_all.fwpkg",
+      "bytes": 3659152,
+      "sha256": "d973c3c7ae6133228930d59e298d8db73cdc9185699f796d07cf0ccba4b8e8a2",
+      "oss": {
+        "key": "pending-upload/hisi-ws63-v40.1.11/ws63-liteos-app_all.fwpkg",
+        "object": "ws63-liteos-app_all.fwpkg",
+        "download": "local-only",
+        "pending_upload": true,
+        "note": "由 csk6-v40.1.11-package 解包得到（HISI/ws63-liteos-app_all.fwpkg）；尚未上传 8090"
+      },
+      "install": {
+        "material_rel": "csk6/V40.1.11_20261119094552/HISI/ws63-liteos-app_all.fwpkg"
+      },
+      "provenance": {
+        "source": "V40.1.11_20261119094552.7z!HISI/ws63-liteos-app_all.fwpkg",
+        "issue": "NOAH-260",
+        "node": "win003",
+        "note": "全量 fwpkg，内嵌 9 个分区名（root_loaderboot_sign.bin … ws63-liteos-mfg-sign.bin）；同包另有 HISI/out/update.fwpkg（1446976 B，OTA，不用）"
       }
     }
   ],
-  "updated_at": "2026-11-19 15:40:00",
-  "updated_by": "NOAH-247"
+  "updated_at": "2026-11-19 16:55:00",
+  "updated_by": "NOAH-263"
 }

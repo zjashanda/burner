@@ -75,6 +75,7 @@ def write_variant(raw: dict) -> Path:
 def measured_raw() -> dict:
     """Turn the real draft profile into a complete measured one (fixture only)."""
     raw = load(DEV01)
+    raw.pop("commissioning")  # a measured profile never carries an approval block
     raw["status"] = "measured"
     raw["verified"] = {"on": "2026-11-19", "by": "unit-test fixture", "evidence": "n/a"}
     raw["control"]["timing"] = {"cut_to_strap_s": 3.0, "strap_to_restore_s": 1.0,
@@ -140,6 +141,7 @@ class Csk6ArgvTests(unittest.TestCase):
     def test_default_argv_uses_profile_transport(self):
         profile = draft_profile()
         chip = profile.chip("csk6")
+        chip.burn.pop("argv_template")  # fall back to the driver default shape
         chip.transport["burn_baud"] = 3000000
         chip.burn["image_addr"] = "0x0"
         argv = phases_module.csk6_argv(Path("Uart_Burn_Tool.exe"), chip, Path("fw.bin"))
@@ -192,12 +194,18 @@ class Dev01ProfileTests(unittest.TestCase):
     def test_unmeasured_values_are_declared_not_guessed(self):
         raw = load(DEV01)
         csk6 = raw["chips"][0]
+        # measured on the bench before any write (NOAH-260 read-only measurement)
+        self.assertEqual(csk6["burn"]["tool"], "csk6-uart-burn-tool-v1.0.5")
+        self.assertEqual(csk6["burn"]["image"], "csk6-v40.1.11-fw-img")
+        self.assertEqual(csk6["transport"]["burn_baud"], 1500000)
+        self.assertEqual(csk6["burn"]["image_addr"], "0x000000")
+        self.assertEqual(csk6["burn"]["argv_template"][:2], ["-b", "{baud}"])
+        # only a real write can produce these
         self.assertIsNone(csk6["burn"]["expected_write_bytes"])
         self.assertIsNone(csk6["burn"]["expected_md5"])
-        self.assertIsNone(csk6["burn"]["tool"])
         self.assertIsNone(csk6["verify"]["expect"])
         required = " ".join(raw["measurement_required"])
-        for token in ("port-map", "expected_write_bytes", "expected_md5", "Uart_Burn_Tool", "V40.1.11"):
+        for token in ("port-map", "expected_write_bytes", "expected_md5", "v1.0.5", "V40.1.11"):
             self.assertIn(token, required)
 
     def test_write_steps_are_refused_on_a_draft(self):
@@ -361,8 +369,8 @@ class Csk6IndexTests(unittest.TestCase):
         self.assertNotIn("oss://", json.dumps(asset))
 
     def test_index_and_manifest_share_the_skill_version(self):
-        self.assertEqual(load(INDEX)["skill_version"], "1.3.0")
-        self.assertEqual(load(MANIFEST)["version"], "1.3.0")
+        self.assertEqual(load(INDEX)["skill_version"], "1.4.0")
+        self.assertEqual(load(MANIFEST)["version"], "1.4.0")
 
 
 if __name__ == "__main__":

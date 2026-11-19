@@ -3,8 +3,9 @@
 No hardware: the phase functions are replaced by fakes that emit receipts with
 the same shape a real run writes, and the promote step re-reads them. The point
 of these tests is that the circle (no write until measured / no measurement
-without a write) is closed *only* through an explicit approval block, and that
-a status flip without the graded values is refused.
+without a write) is closed *only* through an explicit approval block that pins
+one node, one device and every tool/image sha256, that a first run happens
+once, and that a status flip without the graded values is refused.
 """
 from __future__ import annotations
 
@@ -20,26 +21,22 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import burn as cli  # noqa: E402
 from core import commission as commission_module  # noqa: E402
+from core.assets import Assets  # noqa: E402
 from core.profile import Profile, ProfileError  # noqa: E402
 
 DEV01 = ROOT / "scripts" / "profiles" / "csk6-hisi-dev01.json"
 WRITE_SIZE = 5685248
 DEVICE_MD5 = "0xf6d6369435d52784efe1119ebd08f582"
+APPROVAL = "NOAH-263"
+NODE = "win003"
 
 
 def draft_raw(tmp: Path, **block_overrides) -> dict:
     raw = json.loads(DEV01.read_text(encoding="utf-8"))
     raw["lock_path"] = str(tmp / "bench.lock")
-    block = {"approved_by": "郑保山", "approval_ref": "NOAH-259",
-             "allowed_steps": ["burn:csk6", "verify:csk6", "burn:hisi", "verify:hisi"],
-             "max_write_steps": 2,
-             "expires_at": "2999-01-01 00:00:00"}
+    block = dict(raw["commissioning"])
     block.update(block_overrides)
     raw["commissioning"] = block
-    for chip in raw["chips"]:
-        chip["burn"]["tool"] = "csk-uart-burn-tool" if chip["id"] == "csk6" else "hisi-burntool-gold"
-        chip["burn"]["image"] = ("tcl-csk7-v0.0.41" if chip["id"] == "csk6"
-                                 else "hisi-ws63-v8-h363t20-wfmv206.111.1.16")
     return raw
 
 
@@ -49,6 +46,21 @@ def write_profile(tmp: Path, raw: dict, name: str = "profile.json") -> Path:
     return path
 
 
+def make_material(tmp: Path, raw: dict) -> Path:
+    """One dummy file per planned asset, so --material-dir resolution works."""
+    assets = Assets(ROOT / "assets" / "manifest.json")
+    material = tmp / "material"
+    for chip in raw["chips"]:
+        for asset_id in (chip["burn"].get("tool"), chip["burn"].get("image")):
+            if not asset_id:
+                continue
+            rel = assets.get(asset_id)["install"].get("material_rel")
+            path = material / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"fixture")
+    return material
+
+
 def fake_preflight(ctx):
     return {"started_at": "2026-11-19 15:00:00", "verdict": "PASS", "ports": [],
             "expected_ports": [], "missing_ports": [], "captured": {}, "versions_before": {},
@@ -56,18 +68,24 @@ def fake_preflight(ctx):
 
 
 def fake_burn(ctx, chip):
+    if chip.driver == "hisi-burntool":
+        return {"chip": chip.id, "driver": chip.driver, "verdict": "PASS",
+                "checks": {"success_tokens": True, "no_failure_tokens": True, "power_receipts": True},
+                "markers": {}, "tool": "BurnTool.exe", "tool_sha256": "a" * 64,
+                "image": "ws63.fwpkg", "image_sha256": "b" * 64,
+                "cmd": ["BurnTool.exe", "-com:32", "-bin:ws63.fwpkg", "-signalbaud:1000000",
+                        "-chiptype:13", "-onlyburn:root_loaderboot_sign.bin"],
+                "tool_exit": 0, "optlog": "optLog_1.txt", "optlog_sha256": "c" * 64, "optlog_bytes": 100,
+                "tool_log": str(Path(ctx["run_dir"]) / "tool_logs" / "tool_hisi.log")}
     return {"chip": chip.id, "driver": chip.driver, "verdict": "PASS",
             "checks": {"exit_zero": True, "markers": True, "write_size": True, "device_md5": True},
             "markers": {marker: True for marker in chip.burn.get("success_markers") or ["ok"]},
             "write_size": WRITE_SIZE, "device_md5": DEVICE_MD5,
             "tool": "tool.exe", "tool_sha256": "a" * 64, "image": "fw.bin", "image_sha256": "b" * 64,
-            "image_addr": "0x0", "burn_port": "COM34" if chip.id == "csk6" else "COM32",
-            "burn_baud": 3000000,
-            "cmd": (["Uart_Burn_Tool.exe", "-b", "3000000", "-p", "COM34", "-f", "fw.bin", "-a", "0x0"]
-                    if chip.id == "csk6" else
-                    ["BurnTool.exe", "-com:32", "-bin:fw.bin", "-signalbaud:1000000",
-                     "-chiptype:13", "-onlyburn:root_loaderboot_sign.bin"]),
-            "tool_log": str(Path(ctx["run_dir"]) / "tool_logs" / f"tool_{chip.id}.log")}
+            "image_addr": "0x000000", "burn_port": "COM34", "burn_baud": 1500000,
+            "cmd": ["Uart_Burn_Tool.exe", "-b", "1500000", "-p", "COM34", "-f", "fw.bin",
+                    "-a", "0x000000"],
+            "tool_log": str(Path(ctx["run_dir"]) / "tool_logs" / "tool_csk6.log")}
 
 
 def fake_verify(ctx, chip):
@@ -77,12 +95,30 @@ def fake_verify(ctx, chip):
             "expectation": {"chip": chip.id, "version_key": chip.verify["version_key"],
                             "expected": "", "got": version},
             "window_s": 120, "measurement_mode": True,
+            "power_cycle": {"verdict": "PASS"},
             "checks": {"version_keys_present": True, "expected_version": None, "power_cycle": "PASS"},
             "verdict": "PASS"}
 
 
 def fake_receipt(ctx, state):
     return {"verdict": "PASS"}
+
+
+def run_all(tmp: Path, raw: dict, node: str | None = NODE, extra: list[str] | None = None,
+            **patches):
+    path = write_profile(tmp, raw)
+    material = make_material(tmp, raw)
+    argv = ["all", "--profile", str(path), "--run-dir", str(tmp),
+            "--material-dir", str(material), "--confirm-write", "--commission", APPROVAL]
+    if node:
+        argv += ["--node", node]
+    argv += extra or []
+    with mock.patch.object(cli, "phase_preflight", patches.get("preflight", fake_preflight)), \
+            mock.patch.object(cli, "phase_burn", patches.get("burn", fake_burn)), \
+            mock.patch.object(cli, "phase_verify", patches.get("verify", fake_verify)), \
+            mock.patch.object(cli, "phase_receipt", patches.get("receipt", fake_receipt)), \
+            mock.patch.object(cli, "check_run_pins", patches.get("pins", lambda *a, **k: None)):
+        return cli.main(argv), path
 
 
 class CommissioningGuardTests(unittest.TestCase):
@@ -98,21 +134,37 @@ class CommissioningGuardTests(unittest.TestCase):
             raw.pop("commissioning")
             path = write_profile(Path(tmp), raw)
             code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
-                             "--confirm-write", "--commission", "NOAH-259"])
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
         self.assertEqual(code, 3)
 
     def test_wrong_approval_ref_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_profile(Path(tmp), draft_raw(Path(tmp)))
             code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
-                             "--confirm-write", "--commission", "NOAH-999"])
+                             "--confirm-write", "--commission", "NOAH-999", "--node", NODE])
         self.assertEqual(code, 3)
 
     def test_commission_still_needs_confirm_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = write_profile(Path(tmp), draft_raw(Path(tmp)))
             code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
-                             "--commission", "NOAH-259"])
+                             "--commission", APPROVAL, "--node", NODE])
+        self.assertEqual(code, 3)
+
+    def test_commission_needs_the_approved_node(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_profile(Path(tmp), draft_raw(Path(tmp)))
+            self.assertEqual(cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                                       "--confirm-write", "--commission", APPROVAL]), 3)
+            self.assertEqual(cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                                       "--confirm-write", "--commission", APPROVAL,
+                                       "--node", "win005"]), 3)
+
+    def test_commission_only_runs_the_whole_plan(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_profile(Path(tmp), draft_raw(Path(tmp)))
+            code = cli.main(["step", "burn:csk6", "--profile", str(path), "--run-dir", tmp,
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
         self.assertEqual(code, 3)
 
     def test_step_outside_allowed_steps_refused(self):
@@ -120,7 +172,7 @@ class CommissioningGuardTests(unittest.TestCase):
             raw = draft_raw(Path(tmp), allowed_steps=["verify:csk6"])
             path = write_profile(Path(tmp), raw)
             code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
-                             "--confirm-write", "--commission", "NOAH-259"])
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
         self.assertEqual(code, 3)
 
     def test_write_budget_is_enforced(self):
@@ -128,7 +180,43 @@ class CommissioningGuardTests(unittest.TestCase):
             raw = draft_raw(Path(tmp), max_write_steps=1)  # the plan has two burns
             path = write_profile(Path(tmp), raw)
             code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
-                             "--confirm-write", "--commission", "NOAH-259"])
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
+        self.assertEqual(code, 3)
+
+    def test_pinned_burn_port_must_match_the_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = draft_raw(Path(tmp))
+            raw["commissioning"]["device"]["burn_ports"]["csk6"] = "COM99"
+            path = write_profile(Path(tmp), raw)
+            code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
+        self.assertEqual(code, 3)
+
+    def test_pinned_control_port_must_match_the_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = draft_raw(Path(tmp))
+            raw["commissioning"]["device"]["control_port"] = "COM1"
+            path = write_profile(Path(tmp), raw)
+            code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
+        self.assertEqual(code, 3)
+
+    def test_pinned_asset_must_be_the_one_the_profile_uses(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = draft_raw(Path(tmp))
+            raw["chips"][0]["burn"]["tool"] = "csk-uart-burn-tool"  # 1.0.10, not the pin
+            path = write_profile(Path(tmp), raw)
+            code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
+        self.assertEqual(code, 3)
+
+    def test_pinned_sha_must_equal_the_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = draft_raw(Path(tmp))
+            raw["commissioning"]["pins"]["csk6"]["tool"]["sha256"] = "0" * 64
+            path = write_profile(Path(tmp), raw)
+            code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
         self.assertEqual(code, 3)
 
     def test_expired_block_is_refused_on_load(self):
@@ -148,7 +236,16 @@ class CommissioningGuardTests(unittest.TestCase):
 
     def test_block_shape_is_validated(self):
         for bad in ({"approved_by": ""}, {"allowed_steps": []}, {"max_write_steps": 9},
+                    {"max_runs": 2}, {"node": ""}, {"device": {}}, {"pins": {}},
                     {"expires_at": "2026-11-20T00:00:00"}):  # time-lint:allow - rejection fixture
+            with tempfile.TemporaryDirectory() as tmp:
+                path = write_profile(Path(tmp), draft_raw(Path(tmp), **bad))
+                with self.assertRaises(ProfileError):
+                    Profile(path)
+
+    def test_pin_shape_is_validated(self):
+        for bad in ({"pins": {"csk6": {"tool": {}}}},
+                    {"device": {"serial": "x", "control_port": "COM1", "burn_ports": {}}}):
             with tempfile.TemporaryDirectory() as tmp:
                 path = write_profile(Path(tmp), draft_raw(Path(tmp), **bad))
                 with self.assertRaises(ProfileError):
@@ -157,13 +254,7 @@ class CommissioningGuardTests(unittest.TestCase):
 
 class CommissioningRunTests(unittest.TestCase):
     def _run(self, tmp: Path) -> tuple[Path, Path]:
-        path = write_profile(tmp, draft_raw(tmp))
-        with mock.patch.object(cli, "phase_preflight", fake_preflight), \
-                mock.patch.object(cli, "phase_burn", fake_burn), \
-                mock.patch.object(cli, "phase_verify", fake_verify), \
-                mock.patch.object(cli, "phase_receipt", fake_receipt):
-            code = cli.main(["all", "--profile", str(path), "--run-dir", str(tmp),
-                             "--confirm-write", "--commission", "NOAH-259"])
+        code, path = run_all(tmp, draft_raw(tmp))
         self.assertEqual(code, 0)
         return path, tmp / "commissioning.receipt.json"
 
@@ -174,7 +265,10 @@ class CommissioningRunTests(unittest.TestCase):
             measurement = json.loads(receipt_path.read_text(encoding="utf-8"))
             self.assertEqual(measurement["schema"], commission_module.COMMISSION_SCHEMA)
             self.assertTrue(measurement["complete"], measurement["missing"])
-            self.assertEqual(measurement["commissioning"]["approval_ref"], "NOAH-259")
+            self.assertEqual(measurement["commissioning"]["approval_ref"], APPROVAL)
+            self.assertEqual(measurement["node"], NODE)
+            self.assertIn("resources", measurement)
+            self.assertIn("commands", measurement["control"])
 
             out = tmp / "csk6-hisi-dev01.measured.json"
             code = cli.main(["promote", "--profile", str(path), "--from", str(receipt_path),
@@ -186,6 +280,9 @@ class CommissioningRunTests(unittest.TestCase):
             self.assertEqual(csk6.burn["expected_write_bytes"], WRITE_SIZE)
             self.assertEqual(csk6.burn["expected_md5"], DEVICE_MD5)
             self.assertEqual(csk6.verify["expect"], "V40.1.11")
+            hisi = promoted.chip("hisi")
+            self.assertEqual(hisi.burn["signal_baud"], 1000000)
+            self.assertEqual(hisi.verify["expect"], "V40.1.11")
             self.assertNotIn("commissioning", promoted.raw)
             self.assertNotIn("measurement_required", promoted.raw)
 
@@ -194,6 +291,47 @@ class CommissioningRunTests(unittest.TestCase):
                 Profile(write_profile(tmp, {**promoted.raw,
                                             "commissioning": draft_raw(tmp)["commissioning"]},
                                       "recommission.json"))
+
+    def test_the_same_approval_never_runs_twice(self):
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            self._run(tmp)
+            code, _ = run_all(tmp, draft_raw(tmp), extra=["--issue", "NOAH-263"])
+        self.assertEqual(code, 3)
+
+    def test_preflight_failure_means_zero_device_action(self):
+        def blocked(ctx):
+            return {"started_at": "2026-11-19 15:00:00", "verdict": "BLOCKED",
+                    "reason": "expected ports missing", "measurement_required": []}
+
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            calls: list[str] = []
+
+            def tracking_burn(ctx, chip):
+                calls.append(chip.id)
+                return fake_burn(ctx, chip)
+
+            code, _ = run_all(tmp, draft_raw(tmp), preflight=blocked, burn=tracking_burn)
+            self.assertEqual(code, 4)
+            self.assertEqual(calls, [])
+            self.assertFalse((tmp / "commissioning.receipt.json").is_file())
+            # the approval is not spent by a pre-gate failure: no write happened
+            self.assertFalse(commission_module.ledger_state(Profile(write_profile(tmp, draft_raw(tmp))),
+                                                           NODE).get("write_started"))
+
+    def test_pin_mismatch_refuses_before_the_tool_runs(self):
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            raw = draft_raw(tmp)
+            path = write_profile(tmp, raw)
+            material = make_material(tmp, raw)
+            code = cli.main(["all", "--profile", str(path), "--run-dir", str(tmp),
+                             "--material-dir", str(material), "--confirm-write",
+                             "--commission", APPROVAL, "--node", NODE])
+            # the fixture files cannot match the pinned sha256 -> refusal, no run
+        self.assertEqual(code, 3)
+        self.assertFalse((Path(tmp_str) / "steps" / "burn-csk6.json").exists())
 
     def test_incomplete_measurement_refuses_to_flip_status(self):
         with tempfile.TemporaryDirectory() as tmp_str:
@@ -222,6 +360,19 @@ class CommissioningRunTests(unittest.TestCase):
             self.assertEqual(code, 3)
             self.assertFalse(out.exists())
 
+    def test_measurement_from_another_node_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            path, receipt_path = self._run(tmp)
+            measurement = json.loads(receipt_path.read_text(encoding="utf-8"))
+            measurement["node"] = "win005"
+            receipt_path.write_text(json.dumps(measurement, ensure_ascii=False), encoding="utf-8")
+            out = tmp / "measured.json"
+            code = cli.main(["promote", "--profile", str(path), "--from", str(receipt_path),
+                             "--out", str(out)])
+            self.assertEqual(code, 3)
+            self.assertFalse(out.exists())
+
 
 class StrapTimingTests(unittest.TestCase):
     def _measured(self, boot_required: bool) -> dict:
@@ -232,7 +383,6 @@ class StrapTimingTests(unittest.TestCase):
         raw["control"]["timing"] = {"cycle_hold_s": 3.0}
         for chip in raw["chips"]:
             chip["boot"] = {"required": boot_required, "method": None}
-            chip["transport"]["burn_baud"] = 3000000
             chip["burn"]["image_addr"] = "0x0"
             chip["verify"].update({"expect": "V40.1.11", "window_s": 120})
         raw["chips"][0]["burn"].update({"expected_write_bytes": WRITE_SIZE, "expected_md5": DEVICE_MD5})

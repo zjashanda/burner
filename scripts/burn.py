@@ -28,7 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.assets import AssetError, Assets, FetchBlocked  # noqa: E402
 from core.bench import Audit, BenchError, BenchLock  # noqa: E402
-from core.commission import (CommissionError, guard_write, promote_profile,  # noqa: E402
+from core.commission import (CommissionError, assert_not_used, check_manifest_pins,  # noqa: E402
+                             check_run_pins, consume, guard_write, promote_profile,
                              write_measurement)  # noqa: E402
 from core.contract import SCHEMAS, now_bj  # noqa: E402
 from core.device_snapshot import (DeviceSnapshotError, apply_snapshot,  # noqa: E402
@@ -172,7 +173,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm-write", action="store_true", help="required for boot/burn/recover steps")
     parser.add_argument("--commission", default=None, metavar="APPROVAL_REF",
                         help="first bring-up on a draft profile: the approval reference from the profile's "
-                             "commissioning block (plus --confirm-write); writes commissioning.receipt.json")
+                             "commissioning block (plus --confirm-write and --node); writes "
+                             "commissioning.receipt.json")
+    parser.add_argument("--node", default=None, metavar="HOST",
+                        help="executing host; required with --commission and must equal the approved node")
     args = parser.parse_args(argv)
 
     if args.command != "promote" and not args.run_dir:
@@ -208,6 +212,22 @@ def main(argv: list[str] | None = None) -> int:
         assets.require(profile.asset_ids())
         plan = plan_steps(profile)
 
+        if args.commission:
+            if args.command not in ("plan", "preflight", "all"):
+                raise CommissionError(
+                    "--commission runs the whole approved plan in order (preflight first); "
+                    "only 'all' may write, 'plan' and 'preflight' are read-only")
+            if profile.commissioning:
+                if not str(args.node or "").strip():
+                    raise CommissionError(
+                        "--commission needs --node <the approved host>; an approval covers exactly one node")
+                if args.node.strip() != str(profile.commissioning["node"]).strip():
+                    raise CommissionError(
+                        f"--node {args.node!r} is not the node this approval covers "
+                        f"({profile.commissioning['node']!r})")
+                check_manifest_pins(profile, profile.commissioning, assets)
+                assert_not_used(profile, profile.commissioning)
+
         if args.command == "plan" or args.dry_run:
             print(plan_text(profile, assets, material_dir, cache_dir, snapshot))
             print("\n[dry-run] no serial port opened, no burn tool started")
@@ -240,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             "profile": profile, "run_dir": run_dir, "material_dir": material_dir,
             "cache_dir": cache_dir, "assets": assets, "expect": expect,
             "issue": args.issue or profile.node,
+            "node": args.node or profile.node,
             "audit": Audit(run_dir, args.issue or profile.node),
             "device_snapshot": snapshot,
             "commissioning": profile.commissioning if args.commission else None,
@@ -260,11 +281,26 @@ def main(argv: list[str] | None = None) -> int:
         _guard_write(profile, steps, plan, args.commission, args.confirm_write)
         state.require(steps[0], plan)
 
+        if ctx.get("commissioning") and args.command == "all":
+            # Zero device action when a pinned file is not the pinned bytes:
+            # resolve and hash everything before the bench lock or any port.
+            for chip in profile.chips:
+                if not (chip.tool_asset and chip.image_asset):
+                    continue
+                tool = assets.resolve(chip.tool_asset, material_dir, cache_dir)
+                image = assets.resolve(chip.image_asset, material_dir, cache_dir)
+                check_run_pins(profile, ctx["commissioning"], chip, tool, image)
+
         worst = EXIT_OK
         receipt_path: Path | None = None
+        ledger_consumed = False
         with BenchLock(profile.node, Path(profile.raw["lock_path"]) if profile.raw.get("lock_path") else None):
             for step in steps:
                 state.require(step, plan)
+                if ctx.get("commissioning") and step in write_steps(plan) and not ledger_consumed:
+                    path = consume(profile, ctx["commissioning"], run_dir)
+                    ledger_consumed = True
+                    print(json.dumps({"step": "commissioning-ledger", "consumed": str(path)}, ensure_ascii=False))
                 receipt = _execute_step(ctx, state, step)
                 verdict = str(receipt.get("verdict", "FAIL"))
                 if step == RECEIPT:
@@ -290,6 +326,9 @@ def main(argv: list[str] | None = None) -> int:
                         print(json.dumps({"step": "receipt", "verdict": failed_receipt.get("verdict"),
                                           "receipt": str(receipt_path)}, ensure_ascii=False))
                     break
+        if ledger_consumed:
+            consume(profile, ctx["commissioning"], run_dir, stage="finished",
+                    extra={"first_run_verdict": "PASS" if worst == EXIT_OK else "FAIL"})
         if ctx.get("commissioning") and args.command == "all" and worst == EXIT_OK:
             path = write_measurement(run_dir, profile, ctx["commissioning"])
             print(json.dumps({"step": "commissioning-receipt", "receipt": str(path),

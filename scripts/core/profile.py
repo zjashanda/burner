@@ -143,8 +143,12 @@ class Chip:
             raise ProfileError(f"{where}.transport.log_baud must be a positive int")
         if not str(self.transport.get("burn_port") or "").strip():
             raise ProfileError(f"{where}.transport.burn_port is required")
-        if not _is_int(self.transport.get("burn_baud")) or self.transport["burn_baud"] <= 0:
-            raise ProfileError(f"{where}.transport.burn_baud must be a positive int")
+        if self.driver != "hisi-burntool":
+            # BurnTool writes through ``-signalbaud``; the log port baud is the
+            # only baud that profile declares for HISI, so a separate
+            # ``burn_baud`` must not be invented for it.
+            if not _is_int(self.transport.get("burn_baud")) or self.transport["burn_baud"] <= 0:
+                raise ProfileError(f"{where}.transport.burn_baud must be a positive int")
 
         if self.driver == "venusa-uart":
             if not ADDR.match(str(self.burn.get("image_addr") or "")):
