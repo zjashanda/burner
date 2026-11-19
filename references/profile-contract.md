@@ -86,6 +86,52 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
   sha256 `b70eca75…`）目前是 `node-attachment`，`oss.download=local-only`——没有可取得位置就不编造 OSS 路径；
   解包后的写入镜像需另登记。
 
+## 3.2 draft → measured：commissioning（首跑闭环）
+
+draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_write_bytes` / `expected_md5` /
+`verify.expect`（以及 `control.timing.cycle_hold_s`）只有**真跑一次**才拿得到——直接用这两条规则会形成死循环。
+闭环方式是**一次受控首跑**，证据来自这次运行本身，状态不手改：
+
+1. profile 里由真人写一个 `commissioning` 块（`status` 必须是 `draft`，measured profile 带这个块直接报错）：
+
+```json
+"commissioning": {
+  "approved_by": "郑保山",
+  "approval_ref": "NOAH-259",
+  "allowed_steps": ["burn:csk6", "verify:csk6"],
+  "max_write_steps": 1,
+  "expires_at": "2026-11-20 23:59:59",
+  "note": "首跑测量：只写一次，失败即停"
+}
+```
+
+| 字段 | 规则 |
+|---|---|
+| `approved_by` | 审批人，非空；`promote` 会把它写进 measured profile 的 `verified.by` |
+| `approval_ref` | 审批 Issue/记录号，必须与 `--commission` 完全一致 |
+| `allowed_steps` | 本次允许的步骤（`preflight`/`receipt` 恒允许），白名单之外一步都不许跑 |
+| `max_write_steps` | 写步骤上限，只允许 1 或 2 |
+| `expires_at` | 北京时间 `YYYY-MM-DD HH:MM:SS`；过期后加载即失败，要重新审批 |
+| `note` | 可选，只作说明 |
+
+2. 首跑：`burn.py all --commission <approval_ref> --confirm-write`。两个条件缺一不可，默认守卫不变；
+   `preflight` 在 commissioning 模式下按真实路径执行（枚举端口、校验资产 SHA），`verify` 因为没有
+   `verify.expect` 而以“测量模式”判分：只要求版本键/启动行/上下电回执齐全，并把设备原文原样记下来。
+3. 跑完在 run 目录落 `commissioning.receipt.json`（schema `burner-commissioning/v1`），逐芯片记录
+   WRITE SIZE、设备 MD5、四个成功标记、exit、工具/镜像 SHA、实际 argv、期望版本原文、`window_s`，
+   以及 `reset_log.jsonl` 里量到的实际 `cycle_hold_s`；`complete=false` + `missing` 会写明缺哪项。
+4. `burn.py promote --profile <draft> --from <commissioning.receipt.json> --out <measured.json>`：
+   只把回执里的值搬进 profile（`expected_write_bytes`、`expected_md5`、`verify.expect`、`window_s`、
+   `control.timing.cycle_hold_s`、缺失的 `transport.burn_baud`/`burn_port`、`burn.image_addr`，以及 HISI 实际
+   argv 里的 `-signalbaud` / `-chiptype` / `-onlyburn`），然后 `status` 改 `measured`、删掉 `commissioning`
+   与 `measurement_required`、写 `verified`。任一分级证据缺失、回执来自另一个 profile 文件（SHA 不符）、
+   approval_ref 不符，都会**拒绝生成**（退出码 3），且不留下半成品文件。
+5. `promote` 产出的文件必须能通过 measured 的全部校验才会落盘；把它的 diff 走正常 PR 审阅，不手改状态。
+
+口径补充：`control.timing` 的 `cut_to_strap_s` / `strap_to_restore_s` / `restore_to_strap_off_s` 只在有
+`boot.required` 芯片时才是必填——没有 boot strap 的台架（如 dev01 双芯片）根本不会发 `strap_on/off`，
+强行要求等于逼人编数字；`cycle_hold_s` 始终必填，由首跑实测。
+
 ## 4. 族隔离规则（加载时强制）
 
 1. `board_family: tcl` 的 `control.forbidden_commands` 必须包含 `uut-reset`、`uut-csk-reset`、`uut-burn`；

@@ -28,6 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.assets import AssetError, Assets, FetchBlocked  # noqa: E402
 from core.bench import Audit, BenchError, BenchLock  # noqa: E402
+from core.commission import (CommissionError, guard_write, promote_profile,  # noqa: E402
+                             write_measurement)  # noqa: E402
 from core.contract import SCHEMAS, now_bj  # noqa: E402
 from core.device_snapshot import (DeviceSnapshotError, apply_snapshot,  # noqa: E402
                                   resolve_snapshot)
@@ -132,16 +134,11 @@ def _write_receipt_file(ctx: dict, state: RunState, receipt: dict) -> Path:
     return path
 
 
-def _guard_write(profile: Profile, steps: list[str], confirm_write: bool) -> None:
-    writes = [step for step in steps if step in write_steps(plan_steps(profile))]
-    if not writes:
-        return
-    if not profile.measured:
-        missing = profile.raw.get("measurement_required") or []
-        raise ProfileError(
-            f"profile {profile.name} is draft; write steps {writes} refused until these are measured: {missing}")
-    if not confirm_write:
-        raise ProfileError(f"steps {writes} change power/flash state; re-run with --confirm-write")
+def _guard_write(profile: Profile, steps: list[str], plan: list[str], commission: str | None,
+                 confirm_write: bool) -> list[str]:
+    """Delegate to the commission guard: measured profiles work as before, a
+    draft only writes through an approved, bounded commissioning block."""
+    return guard_write(profile, steps, plan, commission, confirm_write)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -152,10 +149,13 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     parser = argparse.ArgumentParser(description="VenusA/CSK + HISI/HI3863 unified burn driver")
-    parser.add_argument("command", choices=["plan", "preflight", "step", "all", "receipt"])
+    parser.add_argument("command", choices=["plan", "preflight", "step", "all", "receipt", "promote"])
     parser.add_argument("step_id", nargs="?", default=None, help="step id for 'step' (e.g. burn:venusa)")
     parser.add_argument("--profile", required=True, help="profile JSON path (no built-in default)")
-    parser.add_argument("--run-dir", required=True, help="task run directory for receipts and logs")
+    parser.add_argument("--run-dir", default=None, help="task run directory for receipts and logs")
+    parser.add_argument("--from", dest="from_path", default=None,
+                        help="promote: commissioning.receipt.json the measured profile is built from")
+    parser.add_argument("--out", default=None, help="promote: path of the measured profile to write")
     parser.add_argument("--assets", default=str(REPO_ROOT / "assets" / "manifest.json"),
                         help="unified asset manifest (default: <repo>/assets/manifest.json)")
     parser.add_argument("--material-dir", default=None, help="directory holding this run's material tree")
@@ -170,13 +170,35 @@ def main(argv: list[str] | None = None) -> int:
                         help="device-io snapshot or role-map JSON (ark.device-io.v1 / "
                              "ark.device-role-map.v1); its ports override the profile's")
     parser.add_argument("--confirm-write", action="store_true", help="required for boot/burn/recover steps")
+    parser.add_argument("--commission", default=None, metavar="APPROVAL_REF",
+                        help="first bring-up on a draft profile: the approval reference from the profile's "
+                             "commissioning block (plus --confirm-write); writes commissioning.receipt.json")
     args = parser.parse_args(argv)
 
-    run_dir = Path(args.run_dir).expanduser().resolve()
+    if args.command != "promote" and not args.run_dir:
+        print("burner: --run-dir is required for this command", file=sys.stderr)
+        return EXIT_USAGE
+
+    run_dir = Path(args.run_dir).expanduser().resolve() if args.run_dir else None
     material_dir = Path(args.material_dir).expanduser().resolve() if args.material_dir else None
     cache_dir = Path(args.asset_cache).expanduser().resolve() if args.asset_cache else None
 
     try:
+        if args.command == "promote":
+            if not args.from_path or not args.out:
+                print("burner: 'promote' needs --from <commissioning.receipt.json> and --out <measured.json>",
+                      file=sys.stderr)
+                return EXIT_USAGE
+            try:
+                result = promote_profile(Path(args.profile).expanduser().resolve(),
+                                         Path(args.from_path).expanduser().resolve(),
+                                         Path(args.out).expanduser().resolve())
+            except ProfileError as exc:
+                print(f"burner: {exc}", file=sys.stderr)
+                return EXIT_GUARD
+            print(json.dumps(result, ensure_ascii=False))
+            return EXIT_OK
+
         profile = Profile(Path(args.profile).expanduser().resolve())
         snapshot: dict | None = None
         if args.device_snapshot:
@@ -220,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
             "issue": args.issue or profile.node,
             "audit": Audit(run_dir, args.issue or profile.node),
             "device_snapshot": snapshot,
+            "commissioning": profile.commissioning if args.commission else None,
         }
         state = RunState(run_dir)
 
@@ -234,7 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             steps = list(plan)
 
-        _guard_write(profile, steps, args.confirm_write)
+        _guard_write(profile, steps, plan, args.commission, args.confirm_write)
         state.require(steps[0], plan)
 
         worst = EXIT_OK
@@ -267,7 +290,15 @@ def main(argv: list[str] | None = None) -> int:
                         print(json.dumps({"step": "receipt", "verdict": failed_receipt.get("verdict"),
                                           "receipt": str(receipt_path)}, ensure_ascii=False))
                     break
+        if ctx.get("commissioning") and args.command == "all" and worst == EXIT_OK:
+            path = write_measurement(run_dir, profile, ctx["commissioning"])
+            print(json.dumps({"step": "commissioning-receipt", "receipt": str(path),
+                              "note": "promote this profile from the receipt once the bench evidence is archived"},
+                             ensure_ascii=False))
         return worst
+    except CommissionError as exc:
+        print(f"burner: {exc}", file=sys.stderr)
+        return EXIT_GUARD
     except ProfileError as exc:
         print(f"burner: {exc}", file=sys.stderr)
         text = str(exc)
