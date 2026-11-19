@@ -1,7 +1,7 @@
 {
   "schema": "ark.skill-index.v1",
   "skill": "burner",
-  "skill_version": "1.3.0",
+  "skill_version": "1.4.0",
   "repo": "zjashanda/burner",
   "route_schema": "ark.skill-route.v1",
   "route_order": [
@@ -256,10 +256,10 @@
       "profile": "csk6-hisi-dev01",
       "workflow": "wf.burn.csk6-hisi-dev01",
       "inputs": [
-        "profile: scripts/profiles/csk6-hisi-dev01.json（status=draft）",
+        "profile: scripts/profiles/csk6-hisi-dev01.json（status=draft + commissioning 块）",
         "逐节点枚举的 port-map（--device-snapshot，必填；profile 内 COM 只是 win003 参考值）",
-        "CSK6 写入镜像 + V40.1.11 分发包 csk6-v40.1.11-package",
-        "HISI 镜像与 BurnTool_Gold"
+        "V40.1.11 包解包后的写入镜像 csk6-v40.1.11-fw-img + csk6-uart-burn-tool-v1.0.5",
+        "V40.1.11 包解包后的 HISI 镜像 hisi-ws63-v40.1.11-all-fwpkg + BurnTool_Gold"
       ],
       "outputs": [
         "steps/preflight.json（含 device_snapshot 的 roles）",
@@ -269,16 +269,18 @@
         "run.receipt.json（burner-receipt/v1）"
       ],
       "preconditions": [
-        "profile status=draft：只允许 plan/preflight；写阶段一律退出码 3",
-        "升级 measured 必须先补齐 measurement_required 的实测值（含 expected_write_bytes / expected_md5）",
+        "profile status=draft：普通 burn 一律退出码 3；首跑只能走 --commission <approval_ref> --node <approved node> --confirm-write",
+        "commissioning 块必须钉住 approved_by / approval_ref / node / device（serial + 端口）/ 每个 tool+image 的 sha256 / max_runs=1",
+        "同一 approval_ref 只写一次（节点级 ledger），失败不自动重试、不重跑；预门禁任一失败则设备零动作",
         "跨节点禁止复用 COM 映射（kb-knowledge-99ced0adc4e3）；必须传 --device-snapshot",
         "CSK6 PASS 判据：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0（kb-knowledge-368ec0d51d2c）",
-        "HISI 分区集与本包不一致记 NEEDS_REVIEW，不得写 PASS"
+        "HISI PASS 判据：optLog 成功 token、无失败 token、4 条上下电回执全 PASS；分区集与本包不一致记 NEEDS_REVIEW",
+        "measured 只能由 commissioning.receipt.json + promote 产出，不手改状态"
       ],
       "evidence_schema": "burner-receipt/v1",
       "version": "1.0.0",
       "status": "draft",
-      "blocked_reason": "profile 未 measured；写驱动已实现并单测，但真机证据由 win003/win005 节点 Issue 产出后才允许升级"
+      "blocked_reason": "首跑 commissioning 待 win003 执行；本 profile 已补齐只读可测字段，写后字段（WRITE SIZE / 设备 MD5 / 启动横幅 / HISI signal_baud）仍为空"
     }
   ],
   "chips": [
@@ -373,7 +375,7 @@
         "burn.csk6-hisi-dev01",
         "burn.port-asset-preflight"
       ],
-      "blocked_reason": "profile draft：写阶段一律拒绝；升级 measured 需节点实测 WRITE SIZE / MD5 / 端口映射与启动版本原文",
+      "blocked_reason": "profile draft：普通写阶段拒绝；只读字段已测实，写后字段由 NOAH-263 受控首跑（commissioning + promote）回填，再升 measured",
       "knowledge": [
         "kb-knowledge-99ced0adc4e3",
         "kb-knowledge-368ec0d51d2c",
@@ -413,6 +415,26 @@
       "write_addr": null,
       "availability": "node-attachment（win003 实测；尚未上传 8090，oss.download=local-only，不构造猜测 URL）",
       "note": "7z 是分发包，不是写入镜像；解包后的镜像 file/bytes/sha256 与写地址需实测后另登记（见 profile.measurement_required）"
+    },
+    {
+      "firmware_id": "csk6-v40.1.11-fw-img",
+      "chip": "csk6",
+      "version": "V40.1.11",
+      "file": "fw.img",
+      "bytes": 16777216,
+      "sha256": "db0a618d570bcf258a47a011de735d25dcb2745c30bd741a73a25b7ff0362f6d",
+      "write_addr": "0x000000",
+      "note": "由 V40.1.11 包解包得到（CSK/fw.img）；16 MiB 全镜像，写 0x0"
+    },
+    {
+      "firmware_id": "hisi-ws63-v40.1.11-all-fwpkg",
+      "chip": "hisi",
+      "version": "V40.1.11",
+      "file": "ws63-liteos-app_all.fwpkg",
+      "bytes": 3659152,
+      "sha256": "d973c3c7ae6133228930d59e298d8db73cdc9185699f796d07cf0ccba4b8e8a2",
+      "write_addr": "由 BurnTool -onlyburn 9 个分区决定",
+      "note": "由 V40.1.11 包解包得到（HISI/ws63-liteos-app_all.fwpkg）；内嵌 9 个分区名"
     }
   ],
   "tools": [
@@ -422,7 +444,8 @@
       "file": "Uart_Burn_Tool.exe",
       "sha256": "56aefe470dd40afe572e652e6560bc252643728c1dbd4d2f63daf4582f88001e",
       "chip": "venusa",
-      "install": "assets/manifest.json → install.material_rel / cache_rel"
+      "install": "assets/manifest.json → install.material_rel / cache_rel",
+      "bytes": 10892822
     },
     {
       "tool_id": "hisi-burntool-gold",
@@ -431,6 +454,16 @@
       "sha256": "4bd51bc3ee3e32c8da50698bb92b80a63f631dfa1d9cb1a412a1a5b4ba21cc0f",
       "chip": "hisi",
       "install": "assets/manifest.json；需同目录 DLL"
+    },
+    {
+      "tool_id": "csk6-uart-burn-tool-v1.0.5",
+      "version": "v1.0.5",
+      "file": "Uart_Burn_Tool.exe",
+      "bytes": 83968,
+      "sha256": "4bfdf6800b32dc9fa7ed5e17f039dc1ea4a7f049c25acfc98f83e3dcfcf197bb",
+      "chip": "csk6",
+      "install": "assets/manifest.json → install.material_rel（V40.1.11 包 CSK/ 目录）/ cache_rel",
+      "note": "与 csk-uart-burn-tool 1.0.10 不同资产，CSK6 台架只用本变体"
     }
   ],
   "workflows": [
@@ -508,8 +541,8 @@
         "verify:hisi",
         "receipt"
       ],
-      "entry": "python scripts/burn.py plan|preflight --profile scripts/profiles/csk6-hisi-dev01.json --run-dir <dir> --device-snapshot <port-map.json>（draft：写阶段需先把 profile 升级为 measured）",
-      "note": "严格串行；任一步 FAIL/BLOCKED 即停并写出 FAIL 回执。CSK6 驱动 csk6-uart 已实现并单测，真机验收由节点侧 Issue 执行",
+      "entry": "python scripts/burn.py plan|preflight --profile scripts/profiles/csk6-hisi-dev01.json --run-dir <dir> --device-snapshot <port-map.json>；首跑：all --commission NOAH-263 --node win003 --confirm-write；随后 promote 由回执生成 measured profile",
+      "note": "严格串行；任一步 FAIL/BLOCKED 即停并写出 FAIL 回执。CSK6 驱动 csk6-uart 已实现并单测；首跑由 win003 节点侧 Issue 执行一次，不重试",
       "judgement_items": [
         {
           "n": 1,
@@ -610,6 +643,6 @@
     "task_dir_owner": "lstest",
     "note": "burner 只写烧录产物，不负责建整套任务目录"
   },
-  "updated_at": "2026-11-19 15:30:00",
-  "updated_by": "NOAH-247"
+  "updated_at": "2026-11-19 17:05:00",
+  "updated_by": "NOAH-263"
 }

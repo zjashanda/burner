@@ -86,13 +86,29 @@ python scripts\burn.py preflight --profile ... --run-dir ... --asset-cache D:\zh
 - `local-only`：不联网，缺文件即 BLOCKED。
 - 缺 bucket 环境变量或 `ossutil` 不在 PATH：抛 `FetchBlocked`，不猜默认 bucket、不静默回退。
 
-## 5. 已登记资产（2026-11-10）
+## 5. 已登记资产（2026-11-19）
 
 | id | 类型 | 芯片 | 版本 | SHA-256（前 16） |
 |---|---|---|---|---|
 | `csk-uart-burn-tool` | tool | CSK7/VenusA | 1.0.10 | `56aefe470dd40afe` |
+| `csk6-uart-burn-tool-v1.0.5` | tool | CSK6/VenusA | v1.0.5 | `4bfdf6800b32dc9f` |
 | `hisi-burntool-gold` | tool | HI3863/WS63 | unversioned-20261027 | `4bd51bc3ee3e32c8` |
 | `tcl-csk7-v0.0.41` | firmware | CSK7/VenusA | V0.0.41 | `e2515c52a17140d0` |
 | `hisi-ws63-v8-h363t20-wfmv206.111.1.16` | firmware | HI3863/WS63 | V8-H363T20-WFMV206.111.1.16 | `ed2eaf013cc761ed` |
+| `csk6-v40.1.11-package` | firmware（分发包） | CSK6/VenusA | V40.1.11 | `b70eca75db330e80` |
+| `csk6-v40.1.11-fw-img` | firmware | CSK6/VenusA | V40.1.11 | `db0a618d570bcf25` |
+| `hisi-ws63-v40.1.11-all-fwpkg` | firmware | HI3863/WS63 | V40.1.11 | `d973c3c7ae613322` |
 
 `BurnTool.exe` 需要同目录 DLL（`libburn.dll`、Qt5*.dll 等），节点缓存要保留整个 `BurnTool_Gold` 目录。
+
+### 5.1 固件包内绑定工具是独立资产
+
+固件包自带的工具与历史登记的工具**不是同一个资产**：V40.1.11 包内是 `Uart_Burn_Tool.exe` v1.0.5
+（83968 B，sha256 `4bfdf680…`），而已登记的 `csk-uart-burn-tool` 是 1.0.10（10892822 B，
+sha256 `56aefe47…`）。规则：
+
+- 新变体另给 id（`csk6-uart-burn-tool-v1.0.5`），`provenance.source` 写包内路径，`provenance.version_string`
+  写工具自报原文；**不覆盖**旧资产、不把两个文件塞进同一个 id、不用别名伪装成同一 sha256。
+- profile 用哪个工具就写哪个 id；commissioning 的 `pins` 再把 id + sha256 一起钉住，运行前复算文件。
+- `install.material_rel` 指向解包后的包内路径（如 `csk6/V40.1.11_20261119094552/CSK/Uart_Burn_Tool.exe`），
+  节点侧按同一布局准备 `--material-dir`。

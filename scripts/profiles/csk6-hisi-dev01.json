@@ -54,15 +54,16 @@
         "log_port": "COM35",
         "log_baud": 115200,
         "burn_port": "COM34",
-        "burn_baud": null
+        "burn_baud": 1500000
       },
       "burn": {
         "driver": "csk6-uart",
-        "tool": null,
-        "image": null,
+        "tool": "csk6-uart-burn-tool-v1.0.5",
+        "image": "csk6-v40.1.11-fw-img",
         "package": "csk6-v40.1.11-package",
-        "image_addr": null,
-        "argv_template": null,
+        "image_addr": "0x000000",
+        "argv_template": ["-b", "{baud}", "-p", "{port}", "-c", "-t", "10",
+                          "-f", "{image}", "-l", "-m", "-d", "-a", "{addr}", "-s"],
         "success_markers": [
           "CONNECT WITH CHIP SUCCESS",
           "CHIP TYPE = 0x60120001",
@@ -72,15 +73,15 @@
         "expected_write_bytes": null,
         "expected_md5": null,
         "timeout_s": 600,
-        "note": "4 个成功标记与 WRITE SIZE / 设备 MD5 判据来自 kb-knowledge-368ec0d51d2c；工具版本、烧录波特率、镜像地址与 V40.1.11 的实测字节数/MD5 未测，全部留空并列入 measurement_required"
+        "note": "工具=固件包内绑定的 Uart_Burn_Tool v1.0.5（83968 B，sha256 4bfdf680…，NOAH-260 实测；与 1.0.10 资产互不复用）；burn_baud/image_addr/argv 取自包内 CSK6_Burn.bat 原文；4 个成功标记待首跑在 v1.0.5 输出中原文核对；WRITE SIZE 与设备 MD5 只能写后获得"
       },
       "verify": {
         "version_key": "csk6_app",
         "require_keys": ["csk6_app"],
         "require_lines": ["AP Boot Ready"],
         "expect": null,
-        "window_s": null,
-        "note": "设备原文形如 venus ap appliction(V4.1.8@Nov 11 2026 12:27:56)；expect 必须写设备原文而不是包名，未测前留空"
+        "window_s": 120,
+        "note": "设备原文形如 venus ap appliction(V4.1.8@Nov 11 2026 12:27:56)；expect 必须写设备原文而不是包名，首跑后由 commissioning 回执回填"
       },
       "recover": {
         "required": false,
@@ -103,20 +104,30 @@
       "burn": {
         "driver": "hisi-burntool",
         "tool": "hisi-burntool-gold",
-        "image": null,
+        "image": "hisi-ws63-v40.1.11-all-fwpkg",
         "chip_type": "13",
         "signal_baud": null,
-        "onlyburn_parts": [],
+        "onlyburn_parts": [
+          "root_loaderboot_sign.bin",
+          "root_params_sign.bin",
+          "ssb_sign.bin",
+          "flashboot_sign.bin",
+          "flashboot_backup_sign.bin",
+          "ws63_all_nv.bin",
+          "ws63-liteos-app-sign.bin",
+          "efuse_cfg.bin",
+          "ws63-liteos-mfg-sign.bin"
+        ],
         "success_tokens": ["成功", "完成"],
         "failure_tokens": ["失败"],
         "timeout_s": 420,
-        "note": "分区集必须与本包实际分区一致（9 vs 8 会误判，kb-knowledge-5f25b39ebe82）；onlyburn_parts 待本包实测后填全"
+        "note": "镜像=本包 HISI/ws63-liteos-app_all.fwpkg（3659152 B，sha256 d973c3c7…，NOAH-260）；onlyburn 9 个分区名来自该 fwpkg 内嵌清单，实际 -onlyburn 语法由首跑 argv/optLog 确认；signal_baud 只有写后才知道"
       },
       "verify": {
         "version_key": "hisi_sys_ver",
         "require_keys": ["hisi_sys_ver"],
         "expect": null,
-        "window_s": null
+        "window_s": 120
       },
       "recover": {
         "required": false,
@@ -127,17 +138,44 @@
   ],
   "measurement_required": [
     "逐节点重新枚举 CH344 端口并生成 port-map.json，运行时用 --device-snapshot 传入；profile 内 COM 仅为 win003 参考值，禁止跨节点复用（kb-knowledge-99ced0adc4e3）",
-    "control 继电器命令与回执 token 的现场核对（uut-switch1.on/off + switch_idx1_set 是否仍适用），以及 control.timing 的 cut_to_strap_s / strap_to_restore_s / restore_to_strap_off_s / cycle_hold_s 实测值",
-    "CSK6 Uart_Burn_Tool（历史版本 1.0.5）的 bytes / sha256 与节点缓存路径，登记进 assets/manifest.json 后填 burn.tool",
-    "CSK6 burn_baud 与 burn.image_addr（Uart_Burn_Tool -b/-a 的实际取值）；若工具参数不同则填 burn.argv_template",
-    "CSK6 写入镜像：V40.1.11_20261119094552.7z 解包后的镜像文件名 / bytes / sha256，登记为独立 firmware 资产后填 burn.image",
-    "CSK6 V40.1.11 的 expected_write_bytes（WRITE SIZE）与 expected_md5（设备 MD5），以及 4 个成功标记在 1.0.5 输出中的原文核对",
-    "CSK6 verify.expect 的设备原文（venus ap appliction(V40.1.11@...)）与 verify.window_s",
-    "HISI 的 burn_baud / signal_baud / chip_type 与 onlyburn_parts 分区集（本包 9 或 8 个分区需实测确认）",
-    "HISI 镜像资产登记（本包内 HISI bin 的 bytes / sha256）；确认台架 BurnTool 与已登记 hisi-burntool-gold 的 sha256 一致",
-    "HISI verify.expect 的设备原文与 verify.window_s",
-    "把 status 升级为 measured 的节点实测证据（burn/verify step receipt + 串口日志 + 8090 归档 URI），不得只凭代码通过"
+    "control 继电器命令与回执 token 的现场核对（uut-switch1.on/off + switch_idx1_set 是否仍适用），以及 control.timing.cycle_hold_s 实测值",
+    "CSK6 V40.1.11 的 expected_write_bytes（WRITE SIZE）与 expected_md5（设备 MD5），以及 4 个成功标记在 v1.0.5 输出中的原文核对",
+    "CSK6 verify.expect 的设备原文（venus ap appliction(V40.1.11@...)）与 verify.window_s 实测",
+    "HISI 的 signal_baud 与 onlyburn 实际语法（本包 9 个分区名已按 fwpkg 内嵌清单登记，argv/optLog 需写后确认）",
+    "HISI verify.expect 的设备原文与 verify.window_s 实测",
+    "把 status 升级为 measured 的节点实测证据（commissioning.receipt.json + burn/verify step receipt + 串口日志 + 8090 归档 URI），不得只凭代码通过"
   ],
+  "commissioning": {
+    "approved_by": "郑保山",
+    "approval_ref": "NOAH-263",
+    "approved_at": "2026-11-19 17:00:00",
+    "expires_at": "2026-11-21 23:59:59",
+    "node": "win003",
+    "device": {
+      "serial": "USB\\VID_1A86&PID_55D5\\0123456789",
+      "topology": "module_only",
+      "control_port": "COM36",
+      "burn_ports": {"csk6": "COM34", "hisi": "COM32"}
+    },
+    "pins": {
+      "csk6": {
+        "tool": {"asset": "csk6-uart-burn-tool-v1.0.5",
+                 "sha256": "4bfdf6800b32dc9fa7ed5e17f039dc1ea4a7f049c25acfc98f83e3dcfcf197bb"},
+        "image": {"asset": "csk6-v40.1.11-fw-img",
+                  "sha256": "db0a618d570bcf258a47a011de735d25dcb2745c30bd741a73a25b7ff0362f6d"}
+      },
+      "hisi": {
+        "tool": {"asset": "hisi-burntool-gold",
+                 "sha256": "4bd51bc3ee3e32c8da50698bb92b80a63f631dfa1d9cb1a412a1a5b4ba21cc0f"},
+        "image": {"asset": "hisi-ws63-v40.1.11-all-fwpkg",
+                  "sha256": "d973c3c7ae6133228930d59e298d8db73cdc9185699f796d07cf0ccba4b8e8a2"}
+      }
+    },
+    "allowed_steps": ["burn:csk6", "verify:csk6", "burn:hisi", "verify:hisi"],
+    "max_write_steps": 2,
+    "max_runs": 1,
+    "note": "NOAH-263 受控首跑：只按本 profile 的 argv 与钉住的资产 SHA 写一次，两次写（CSK6 + HISI）各一次、不重试；预门禁任一失败则设备零动作；跑完由 commissioning.receipt.json promote，不手改状态"
+  },
   "acceptance": {
     "independent_items": [
       "拓扑与设备存在性：先记录 topology=module_only / baseboard_present 与 baseboard_absent，再逐节点重新枚举端口",

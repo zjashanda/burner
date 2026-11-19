@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from .bench import BenchError, PortLogger, open_control, power_cycle, run_tool, send_control, serial_module
+from .commission import check_run_pins
 from .contract import (SCHEMAS, TIME_CONTRACT, classify_asr, now_bj, parse_versions,
                        read_text_any, sha256_file)
 from .device_snapshot import com_number
@@ -221,6 +222,7 @@ def _burn_venusa(ctx: dict, chip) -> dict:
     profile = ctx["profile"]
     tool = ctx["assets"].resolve(chip.tool_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
     image = ctx["assets"].resolve(chip.image_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
+    check_run_pins(profile, ctx.get("commissioning"), chip, tool, image)
     burn = chip.burn
     argv = [str(tool), "-b", str(chip.transport["burn_baud"]), "-p", str(chip.transport["burn_port"]),
             "-f", str(image)] + [str(item) for item in burn.get("tool_args") or []] + \
@@ -246,6 +248,7 @@ def _burn_hisi(ctx: dict, chip) -> dict:
     profile = ctx["profile"]
     tool = ctx["assets"].resolve(chip.tool_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
     binary = ctx["assets"].resolve(chip.image_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
+    check_run_pins(profile, ctx.get("commissioning"), chip, tool, binary)
     burn = chip.burn
     argv = [str(tool), f"-com:{com_number(chip.transport['burn_port'])}", f"-bin:{binary}",
             f"-signalbaud:{burn.get('signal_baud')}", f"-chiptype:{burn.get('chip_type')}"]
@@ -299,13 +302,21 @@ def _burn_hisi(ctx: dict, chip) -> dict:
         handle.close()
 
     receipts_ok = all(item["receipt_ok"] for item in (cut, restore, cut2, restore2))
-    ok = saw_success and not saw_failure and receipts_ok
+    checks = {"success_tokens": saw_success, "no_failure_tokens": not saw_failure,
+              "power_receipts": receipts_ok}
+    ok = all(checks.values())
+    opt_file = Path(opt_path) if opt_path else None
     return {
         "chip": chip.id, "driver": chip.driver, "tool": str(tool), "tool_sha256": sha256_file(tool),
         "image": str(binary), "image_sha256": sha256_file(binary),
         "cmd": [Path(argv[0]).name] + argv[1:], "tool_log": str(tool_log),
         "optlog": opt_path, "optlog_tail": opt_text[-1200:], "tool_exit": tool_exit,
+        "optlog_bytes": opt_file.stat().st_size if opt_file is not None and opt_file.is_file() else None,
+        "optlog_sha256": sha256_file(opt_file) if opt_file is not None and opt_file.is_file() else None,
+        "signal_baud": burn.get("signal_baud"), "chip_type": burn.get("chip_type"),
+        "onlyburn_parts": list(burn.get("onlyburn_parts") or []),
         "power": {"cut": cut, "restore": restore, "cut2": cut2, "restore2": restore2},
+        "checks": checks,
         "verdict": "PASS" if ok else "FAIL",
         "reason": "" if ok else "BurnTool optLog did not confirm success or a power receipt failed",
     }
@@ -320,6 +331,7 @@ def _burn_csk6(ctx: dict, chip) -> dict:
     """
     tool = ctx["assets"].resolve(chip.tool_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
     image = ctx["assets"].resolve(chip.image_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
+    check_run_pins(ctx["profile"], ctx.get("commissioning"), chip, tool, image)
     burn = chip.burn
     argv = csk6_argv(tool, chip, image)
     result = run_tool(argv, Path(tool).parent, float(burn.get("timeout_s", 600)))
@@ -539,10 +551,13 @@ def phase_receipt(ctx: dict, state) -> dict:
     ok = all_steps_done and assets_report["all_ok"]
     receipt = {
         "issue": ctx.get("issue") or "",
-        "node": profile.node,
+        "node": ctx.get("node") or profile.node,
         "profile": {"name": profile.name, "path": str(profile.path), "sha256": sha256_file(profile.path),
                     "status": profile.status, "family": profile.family},
         "time_contract": TIME_CONTRACT,
+        "commissioning": ({key: ctx["commissioning"].get(key) for key in
+                           ("approved_by", "approval_ref", "node", "device", "pins", "max_runs")}
+                          if ctx.get("commissioning") else None),
         "started_at": state.data.get("created_at") or now_bj(),
         "finished_at": now_bj(),
         "plan": plan,

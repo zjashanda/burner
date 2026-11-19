@@ -22,7 +22,7 @@ description: VenusA/CSK 与 HISI/HI3863 双芯片统一烧录 Skill。按 profil
 2. **写阶段必须 `--confirm-write`**：`boot:*` / `burn:*` / `recover:*` 都会改变设备状态。
 3. **profile 不继承**：`inherits` / `extends` / `defaults_from` / `$ref` 在加载时直接拒绝；每个 profile 自己写全。
 4. **族隔离**：`board_family: tcl` 必须显式禁用 `uut-reset` / `uut-csk-reset` / `uut-burn`；其他族使用 `uut-*` 必须显式写 `control.allow_tcl_commands: true`。
-5. **draft profile 不能写**：`status: draft` 只允许 `plan` / dry-run / preflight（preflight 返回 BLOCKED 并列出待测量项）。唯一例外是**首跑 commissioning**：profile 内有真人写的 `commissioning` 块（`approved_by` / `approval_ref` / `allowed_steps` / `max_write_steps` / `expires_at`），且命令行同时给 `--commission <approval_ref>` 和 `--confirm-write`；跑完写 `commissioning.receipt.json`，再用 `promote` 由回执生成 measured profile，状态不能手改。
+5. **draft profile 不能写**：`status: draft` 只允许 `plan` / dry-run / preflight（preflight 返回 BLOCKED 并列出待测量项）。唯一例外是**首跑 commissioning**：profile 内有真人写的 `commissioning` 块（`approved_by` / `approval_ref` / `node` / `device`（serial + 端口）/ `pins`（每个 tool/image 的 asset + sha256）/ `allowed_steps` / `max_write_steps` / `max_runs=1` / `expires_at`），且命令行同时给 `--commission <approval_ref>`、`--node <approved node>` 和 `--confirm-write`；`--commission` 只接受 `all`，先跑 preflight，任一预门禁失败则设备零动作；同一 approval 只写一次（节点级 ledger），不自动重试。跑完写 `commissioning.receipt.json`，再用 `promote` 由回执生成 measured profile，状态不能手改。
 6. **一台台架同时只允许一个烧录进程**：任何硬件阶段先抢 `%TEMP%\burner-<node>.lock`；被活进程持有时退出码 3，不杀进程、不抢端口。
 7. **每步先落盘再判定**：step receipt + 工具日志 + 串口原始日志 + `reset_log.jsonl`；判定顺序 BLOCKED / FAIL / PASS。
 8. **时间只写北京时间、不带时区**：`YYYY-MM-DD HH:MM:SS`（空格分隔、秒级）；`T`、小数秒、`+08:00`、`Z`、RFC3339 都是违约；设备原始时间只能原样进 `raw_*` 字段（见 `references/result-contract.md`）。
@@ -48,9 +48,9 @@ python scripts\burn.py step verify:hisi --profile ... --run-dir ... --material-d
 python scripts\burn.py all --profile ... --run-dir ... --material-dir ... --confirm-write `
   --expect venusa=V0.0.40 --expect hisi=V8-H363T20-WFMV206.110.1.15
 
-# 首跑 commissioning（draft profile，必须有已批准 commissioning 块）：一次受控写 + 产出实测候选
-python scripts\burn.py all --profile ... --run-dir ... --material-dir ...\assets --issue NOAH-248 `
-  --commission NOAH-259 --confirm-write
+# 首跑 commissioning（draft profile，必须有已批准 commissioning 块）：固定节点 + 单设备 + 钉住 SHA，只写一次
+python scripts\burn.py all --profile ... --run-dir ... --material-dir ...\assets --issue NOAH-263 `
+  --device-snapshot ...\port-map.json --commission NOAH-263 --node win003 --confirm-write
 
 # 由 commissioning.receipt.json 生成 measured profile（缺任一分级证据即拒绝）
 python scripts\burn.py promote --profile ...\csk6-hisi-dev01.json `

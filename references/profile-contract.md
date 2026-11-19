@@ -92,16 +92,32 @@ draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_
 `verify.expect`（以及 `control.timing.cycle_hold_s`）只有**真跑一次**才拿得到——直接用这两条规则会形成死循环。
 闭环方式是**一次受控首跑**，证据来自这次运行本身，状态不手改：
 
-1. profile 里由真人写一个 `commissioning` 块（`status` 必须是 `draft`，measured profile 带这个块直接报错）：
+1. profile 里由真人写一个 `commissioning` 块（`status` 必须是 `draft`，measured profile 带这个块直接报错）。
+   块里的每一个字段都是审批范围的一部分：**只批一个节点、一台设备、每个 tool/image 的确定 sha256、一次首跑**：
 
 ```json
 "commissioning": {
   "approved_by": "郑保山",
-  "approval_ref": "NOAH-259",
-  "allowed_steps": ["burn:csk6", "verify:csk6"],
-  "max_write_steps": 1,
-  "expires_at": "2026-11-20 23:59:59",
-  "note": "首跑测量：只写一次，失败即停"
+  "approval_ref": "NOAH-263",
+  "approved_at": "2026-11-19 17:00:00",
+  "expires_at": "2026-11-21 23:59:59",
+  "node": "win003",
+  "device": {
+    "serial": "USB\\VID_1A86&PID_55D5\\0123456789",
+    "topology": "module_only",
+    "control_port": "COM36",
+    "burn_ports": {"csk6": "COM34", "hisi": "COM32"}
+  },
+  "pins": {
+    "csk6": {"tool": {"asset": "csk6-uart-burn-tool-v1.0.5", "sha256": "4bfdf680…"},
+             "image": {"asset": "csk6-v40.1.11-fw-img", "sha256": "db0a618d…"}},
+    "hisi": {"tool": {"asset": "hisi-burntool-gold", "sha256": "4bd51bc3…"},
+             "image": {"asset": "hisi-ws63-v40.1.11-all-fwpkg", "sha256": "d973c3c7…"}}
+  },
+  "allowed_steps": ["burn:csk6", "verify:csk6", "burn:hisi", "verify:hisi"],
+  "max_write_steps": 2,
+  "max_runs": 1,
+  "note": "首跑测量：只写一次，失败即停，不自动重试"
 }
 ```
 
@@ -109,23 +125,35 @@ draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_
 |---|---|
 | `approved_by` | 审批人，非空；`promote` 会把它写进 measured profile 的 `verified.by` |
 | `approval_ref` | 审批 Issue/记录号，必须与 `--commission` 完全一致 |
+| `approved_at` | 可选，北京时间；只作审计 |
+| `node` | 审批覆盖的执行节点；必须是 profile `nodes` 列表成员，运行时 `--node` 必须与它一致 |
+| `device` | 单设备钉子：`serial`（USB hwid/serial）、`control_port`、每个芯片的 `burn_ports`；与 profile 实际端口不符即拒绝 |
+| `pins` | 每个写入芯片的 `tool` / `image`：资产 id + sha256；资产 id 必须等于 profile 实际使用的，sha256 必须等于 manifest 声明值，运行前还要与实际文件复算一致 |
 | `allowed_steps` | 本次允许的步骤（`preflight`/`receipt` 恒允许），白名单之外一步都不许跑 |
 | `max_write_steps` | 写步骤上限，只允许 1 或 2 |
+| `max_runs` | 固定为 1：首跑不是重试许可 |
 | `expires_at` | 北京时间 `YYYY-MM-DD HH:MM:SS`；过期后加载即失败，要重新审批 |
 | `note` | 可选，只作说明 |
 
-2. 首跑：`burn.py all --commission <approval_ref> --confirm-write`。两个条件缺一不可，默认守卫不变；
-   `preflight` 在 commissioning 模式下按真实路径执行（枚举端口、校验资产 SHA），`verify` 因为没有
-   `verify.expect` 而以“测量模式”判分：只要求版本键/启动行/上下电回执齐全，并把设备原文原样记下来。
-3. 跑完在 run 目录落 `commissioning.receipt.json`（schema `burner-commissioning/v1`），逐芯片记录
-   WRITE SIZE、设备 MD5、四个成功标记、exit、工具/镜像 SHA、实际 argv、期望版本原文、`window_s`，
-   以及 `reset_log.jsonl` 里量到的实际 `cycle_hold_s`；`complete=false` + `missing` 会写明缺哪项。
+2. 首跑：`burn.py all --commission <approval_ref> --node <approved node> --confirm-write`。三个条件缺一不可；
+   `--commission` 只接受 `all`（`plan` / `preflight` 只读可用），因为它必须**从头按序**跑完整个 plan，
+   `preflight` 先跑：枚举端口、核对资产 SHA、核对钉住的端口——任一不过即停，**设备零动作**。
+   写第一个写步骤之前，先在节点级 ledger（`%TEMP%\burner-<bench>-<node>-commissioning.json`）登记
+   `write_started`；同一 `approval_ref` 再次运行会被拒绝，代码里没有任何自动重试。
+   `verify` 因为没有 `verify.expect` 而以“测量模式”判分：只要求版本键/启动行/上下电回执齐全，并把设备原文原样记下来。
+3. 跑完在 run 目录落 `commissioning.receipt.json`（schema `burner-commissioning/v1`），记录 node、执行设备、
+   pins、逐芯片 WRITE SIZE、设备 MD5、四个成功标记、exit、工具/镜像 SHA、实际 argv、
+   HISI optLog（bytes + sha256）、期望版本原文、`window_s`、`reset_log.jsonl` 里量到的实际 `cycle_hold_s`
+   与全部控制回执，以及 `resources`（证据体积、磁盘余量、工具 exit/超时、串口日志字节数）；
+   `complete=false` + `missing` 会写明缺哪项。
+   CSK6/VenusA 按 flash 数字判定（exit 0 + 4 标记 + WRITE SIZE + 设备 MD5）；
+   HISI 按 optLog 成功 token + 无失败 token + 4 条上下电回执判定（BurnTool 的 exit code 只记录不判分）。
 4. `burn.py promote --profile <draft> --from <commissioning.receipt.json> --out <measured.json>`：
    只把回执里的值搬进 profile（`expected_write_bytes`、`expected_md5`、`verify.expect`、`window_s`、
    `control.timing.cycle_hold_s`、缺失的 `transport.burn_baud`/`burn_port`、`burn.image_addr`，以及 HISI 实际
    argv 里的 `-signalbaud` / `-chiptype` / `-onlyburn`），然后 `status` 改 `measured`、删掉 `commissioning`
    与 `measurement_required`、写 `verified`。任一分级证据缺失、回执来自另一个 profile 文件（SHA 不符）、
-   approval_ref 不符，都会**拒绝生成**（退出码 3），且不留下半成品文件。
+   approval_ref / node / device / pins 与审批不符，都会**拒绝生成**（退出码 3），且不留下半成品文件。
 5. `promote` 产出的文件必须能通过 measured 的全部校验才会落盘；把它的 diff 走正常 PR 审阅，不手改状态。
 
 口径补充：`control.timing` 的 `cut_to_strap_s` / `strap_to_restore_s` / `restore_to_strap_off_s` 只在有
