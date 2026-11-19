@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .contract import clean, now_bj
+from .contract import clean, now_bj, read_text_any
 
 
 class BenchError(RuntimeError):
@@ -115,6 +115,17 @@ class Audit:
         self.entries.append(entry)
         with self.path.open("a", encoding="utf-8", newline="\n") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+    def event(self, step: str, name: str, **detail: Any) -> dict:
+        """Append a timeline marker (tool start / chip connect) beside the relay commands."""
+        self.run_dir.mkdir(parents=True, exist_ok=True)
+        entry: dict[str, Any] = {"at": now_bj(), "issue": self.issue, "step": step,
+                                 "event": name, **detail}
+        self.entries.append(entry)
+        with self.path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return entry
 
 
 def serial_module():
@@ -260,6 +271,97 @@ def run_tool(argv: list[str], cwd: Path, timeout_s: float) -> dict:
         code = -9
     return {"cmd": [Path(str(argv[0])).name] + [str(item) for item in argv[1:]], "rc": code,
             "elapsed_s": round(time.monotonic() - started, 2), "output": text}
+
+
+def run_tool_watched(argv: list[str], cwd: Path, log_path: Path, timeout_s: float, *,
+                     lead_s: float = 0.0, on_start=None, connect_markers=(),
+                     failure_markers=(), connect_timeout_s: float = 0.0,
+                     poll_s: float = 0.5) -> dict:
+    """Start the tool, run the power sequence, then wait for the chip to connect.
+
+    This is the ``connect_then_power`` order: the burn tool must already hold the
+    burn port and poll the chip before the board leaves reset, otherwise the ROM
+    download window closes before the tool opens the port (NOAH-264/266:
+    ``CONNECT CHIP OVERTIME`` after a fully booted board).
+
+    ``on_start`` is called once, ``lead_s`` after the tool started, and is
+    expected to perform the relay sequence; its return value is kept as the
+    power evidence. The tool's own stdout goes straight to ``log_path`` so the
+    connect marker can be observed while the tool still runs. Every step is
+    timestamped and returned as ``timing``/``timeline`` for the receipt.
+    """
+    log_path = Path(log_path)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    timeline: list[dict] = []
+
+    def mark(name: str, **extra: Any) -> dict:
+        item = {"at": now_bj(), "event": name, **extra}
+        timeline.append(item)
+        return item
+
+    power: dict[str, Any] = {}
+    connected_at = ""
+    failure_at = ""
+    marker_seen = False
+    failure_seen = False
+    timeout_s = float(timeout_s)
+    with log_path.open("wb") as sink:
+        proc = subprocess.Popen([str(item) for item in argv], cwd=str(cwd), stdout=sink,
+                                stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+        mark("tool_started")
+        if on_start is not None:
+            if lead_s > 0:
+                time.sleep(lead_s)
+            mark("power_sequence_started")
+            power = on_start() or {}
+            mark("power_sequence_finished", verdict=power.get("verdict"))
+        if connect_markers:
+            deadline = time.monotonic() + max(float(connect_timeout_s or 0.0), 0.0)
+            while time.monotonic() < deadline and proc.poll() is None:
+                text = read_text_any(log_path) if log_path.is_file() else ""
+                if any(marker in text for marker in failure_markers):
+                    failure_seen = True
+                    failure_at = mark("connect_failed")["at"]
+                    break
+                if any(marker in text for marker in connect_markers):
+                    marker_seen = True
+                    connected_at = mark("chip_connected")["at"]
+                    break
+                time.sleep(poll_s)
+        remaining = timeout_s - (time.monotonic() - started)
+        try:
+            code = proc.wait(timeout=max(remaining, 5.0))
+        except subprocess.TimeoutExpired:
+            mark("tool_timeout", timeout_s=timeout_s)
+            proc.kill()
+            proc.wait()
+            code = -9
+        exited = mark("tool_exited", rc=code)
+        text = read_text_any(log_path) if log_path.is_file() else ""
+    if not marker_seen and any(marker in text for marker in connect_markers):
+        # The marker may have been flushed only when the tool exited.
+        marker_seen, connected_at = True, exited["at"]
+        mark("chip_connected", note="marker present in the tool output after exit")
+    if not failure_seen and any(marker in text for marker in failure_markers):
+        failure_seen = True
+    timing = {
+        "sequence": "connect_then_power",
+        "tool_started_at": next((item["at"] for item in timeline if item["event"] == "tool_started"), ""),
+        "power_started_at": next((item["at"] for item in timeline if item["event"] == "power_sequence_started"), ""),
+        "power_done_at": next((item["at"] for item in timeline if item["event"] == "power_sequence_finished"), ""),
+        "connected_at": connected_at,
+        "connect_marker_seen": marker_seen,
+        "connect_failure_marker_seen": failure_seen,
+        "connect_failure_at": failure_at,
+        "connect_timeout_s": float(connect_timeout_s or 0.0),
+        "tool_exited_at": exited["at"],
+        "connect_markers": list(connect_markers),
+        "connect_failure_markers": list(failure_markers),
+    }
+    return {"cmd": [Path(str(argv[0])).name] + [str(item) for item in argv[1:]], "rc": code,
+            "elapsed_s": round(time.monotonic() - started, 2), "output": text,
+            "power": power, "timing": timing, "timeline": timeline}
 
 
 def stderr(message: str) -> None:

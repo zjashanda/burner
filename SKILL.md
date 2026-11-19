@@ -22,7 +22,7 @@ description: VenusA/CSK 与 HISI/HI3863 双芯片统一烧录 Skill。按 profil
 2. **写阶段必须 `--confirm-write`**：`boot:*` / `burn:*` / `recover:*` 都会改变设备状态。
 3. **profile 不继承**：`inherits` / `extends` / `defaults_from` / `$ref` 在加载时直接拒绝；每个 profile 自己写全。
 4. **族隔离**：`board_family: tcl` 必须显式禁用 `uut-reset` / `uut-csk-reset` / `uut-burn`；其他族使用 `uut-*` 必须显式写 `control.allow_tcl_commands: true`。
-5. **draft profile 不能写**：`status: draft` 只允许 `plan` / dry-run / preflight（preflight 返回 BLOCKED 并列出待测量项）。唯一例外是**首跑 commissioning**：profile 内有真人写的 `commissioning` 块（`approved_by` / `approval_ref` / `node` / `device`（serial + 端口）/ `pins`（每个 tool/image 的 asset + sha256）/ `allowed_steps` / `max_write_steps` / `max_runs=1` / `expires_at`），且命令行同时给 `--commission <approval_ref>`、`--node <approved node>` 和 `--confirm-write`；`--commission` 只接受 `all`，先跑 preflight，任一预门禁失败则设备零动作；同一 approval 只写一次（节点级 ledger），不自动重试。跑完写 `commissioning.receipt.json`，再用 `promote` 由回执生成 measured profile，状态不能手改。
+5. **draft profile 不能写**：`status: draft` 只允许 `plan` / dry-run / preflight（preflight 返回 BLOCKED 并列出待测量项）。唯一例外是**首跑 commissioning**：profile 内有真人写的 `commissioning` 块（`approved_by` / `approval_ref` / `pins`（每个 tool/image 的 asset + sha256）/ `allowed_steps` / `max_write_steps` / `max_runs=1` / `expires_at`，外加**二选一**：单台 `node` + `device`（serial + 端口），或多台 `benches[]`（每台自己的 `bench_id` / `node` / `serial` / `control_port` / `burn_ports` / `approval_ref`）），且命令行同时给 `--commission <approval_ref>`、`--node <approved node>`、`--confirm-write`（多台 profile 还要 `--bench <bench_id>`）；`--commission` 只接受 `all`，先跑 preflight，任一预门禁失败则设备零动作；**同一台架只写一次**（每台一个 ledger，路径含 node + bench_id），不自动重试，换 approval_ref 也不能重开同一台。跑完写 `commissioning.receipt.json`，再用 `promote` 由回执生成 measured profile（多台 profile 的 promote 只产出被选中那一台的 measured profile），状态不能手改。
 6. **一台台架同时只允许一个烧录进程**：任何硬件阶段先抢 `%TEMP%\burner-<node>.lock`；被活进程持有时退出码 3，不杀进程、不抢端口。
 7. **每步先落盘再判定**：step receipt + 工具日志 + 串口原始日志 + `reset_log.jsonl`；判定顺序 BLOCKED / FAIL / PASS。
 8. **时间只写北京时间、不带时区**：`YYYY-MM-DD HH:MM:SS`（空格分隔、秒级）；`T`、小数秒、`+08:00`、`Z`、RFC3339 都是违约；设备原始时间只能原样进 `raw_*` 字段（见 `references/result-contract.md`）。
@@ -51,6 +51,12 @@ python scripts\burn.py all --profile ... --run-dir ... --material-dir ... --conf
 # 首跑 commissioning（draft profile，必须有已批准 commissioning 块）：固定节点 + 单设备 + 钉住 SHA，只写一次
 python scripts\burn.py all --profile ... --run-dir ... --material-dir ...\assets --issue NOAH-263 `
   --device-snapshot ...\port-map.json --commission NOAH-263 --node win003 --confirm-write
+
+# 多台架逐台轮换（一台 = 一个 approval_ref = 一个 ledger）：先 plan 看选中哪台，再跑那一台
+python scripts\burn.py plan --profile scripts\profiles\csk6-hisi-win003.json --run-dir ...\run --bench dev02
+python scripts\burn.py all --profile scripts\profiles\csk6-hisi-win003.json --run-dir ...\run `
+  --material-dir ...\assets --issue NOAH-267 --bench dev02 `
+  --commission NOAH-267-win003-dev02 --node win003 --confirm-write
 
 # 由 commissioning.receipt.json 生成 measured profile（缺任一分级证据即拒绝）
 python scripts\burn.py promote --profile ...\csk6-hisi-dev01.json `
@@ -100,7 +106,7 @@ python scripts\burn.py all --profile ... --run-dir ... --device-snapshot role-ma
 |---|---|---|
 | `preflight` | 枚举 COM、读当前版本、校验资产 hash | `steps/preflight.json`、`serial_logs/preflight_*.log` |
 | `boot:<chip>` | 仅 `boot.required` 的芯片：断电 → boot strap → 上电 → 撤 strap | `steps/boot-*.json`、`reset_log.jsonl` |
-| `burn:<chip>` | `venusa-uart`：`Uart_Burn_Tool -b -p -f -a`；`hisi-burntool`：`BurnTool -com -bin -signalbaud -chiptype -onlyburn` + 断电上电；`csk6-uart`：`Uart_Burn_Tool` + WRITE SIZE / 设备 MD5 / 4 标记判定（`burn.pre_power_cycle=true` 时烧前断电上电并镜像日志口） | `steps/burn-*.json`、`tool_logs/tool_*.log`、`serial_logs/burn-*.log`、BurnTool `optLog` |
+| `burn:<chip>` | `venusa-uart`：`Uart_Burn_Tool -b -p -f -a`；`hisi-burntool`：`BurnTool -com -bin -signalbaud -chiptype -onlyburn` + 断电上电；`csk6-uart`：`Uart_Burn_Tool` + WRITE SIZE / 设备 MD5 / 4 标记判定（`burn.pre_power_cycle=true` 时按 `control.timing.power_sequence` 先上下电或先开串口再上下电，并镜像日志口） | `steps/burn-*.json`、`tool_logs/tool_*.log`、`serial_logs/burn-*.log`、BurnTool `optLog` |
 | `verify:<chip>` | 断电上电，抓串口版本，按 `verify.expect` 判定 | `steps/verify-*.json`、`serial_logs/verify-*_*.log` |
 | `recover:<chip>` | `ftm-clear`（`AT+FTM=0`）或 `power-cycle`；`before_verify` 决定顺序 | `steps/recover-*.json` |
 | `receipt` | 汇总所有步骤 + 资产 + reset_log + 产物 SHA-256 | `run.receipt.json` |
@@ -111,9 +117,13 @@ python scripts\burn.py all --profile ... --run-dir ... --device-snapshot role-ma
 
 - `scripts/profiles/tcl-pvm1005.json`：TCL 台架实测值（COM6 控制、COM3 CSK、COM4 HISI、`uut-switch1`/`uut-csk-boot`、BurnTool 后 `115200 → AT+FTM=0 → 921600`）。
 - `scripts/profiles/midea-csk6.json`：Media/美的 **draft**，声明自己的驱动方式与待测量项，不继承 TCL 的任何端口/命令/时序。
-- `scripts/profiles/csk6-hisi-dev01.json`：CSK6 + HISI CH344 四串口 dev01 台架（win003/win005 **共用一台**）**draft**。
+- `scripts/profiles/csk6-hisi-dev01.json`：CSK6 + HISI CH344 四串口 dev01 台架（win003/win005 **共用一台**）**draft**，单台 `device` 块（历史批准 `NOAH-266`，已消耗，保留供复现）。
   端口只是 win003 参考值：**跨节点禁止复用 COM 映射**，运行时必须逐节点枚举并传 `--device-snapshot`。
   CSK6 走 `csk6-uart`（WRITE SIZE + 设备 MD5 + 4 标记 + exit 0 才 PASS）；未测量项全在 `measurement_required`。
+- `scripts/profiles/csk6-hisi-win003.json` / `csk6-hisi-win005.json`：同一台架族的 **4 台台架 × 每节点**（dev01–dev04）**draft**。
+  `commissioning.benches[]` 每台一条：`bench_id` / `node` / `serial`（usb_parent）/ `control_port` / `log_ports` / `burn_ports` / `approval_ref`（`NOAH-267-<node>-<bench>`）。
+  `--bench <bench_id>` 选中一台；该台的端口就是批准里写的端口。每台一个 ledger，`%TEMP%\burner-<profile>-<node>-<bench_id>-commissioning.json`。
+  端口来自 NOAH-268/269 只读清点（`usb_parent` 是主键，COM 会随重插变化），`control.timing.power_sequence=connect_then_power`。
 
 TCL 与 Media 的差异、隔离规则和独立验收项见 `references/profile-contract.md`。
 
@@ -155,6 +165,13 @@ python tools\time_lint.py --gate            # 时间契约：0 违规才算过�
    4 个标记齐全、exit 0（`kb-knowledge-368ec0d51d2c`）；缺一项即 FAIL，不用其他项 PASS 抵消。
 9. **设备版本串保留前导 `V`**：CSK6 打印 `venus ap appliction(V4.1.8@…)`，比较时按设备原文，
    不要在代码里偷偷去 `V`；真实差异（如 46.1.5 vs 46.1.8）照实记 FAIL/NEEDS_REVIEW。
+10. **先上下电再开工具会错过 ROM 下载窗口**：NOAH-264/266 都是板子完整启动（`AP Boot Ready` /
+    `venus ap appliction(...)`）之后 Uart_Burn_Tool 才开串口，连续 11 次 `CONNECT CHIP OVERTIME`。
+    台架需要 `control.timing.power_sequence=connect_then_power`：先启动工具开 COM 等待 → 继电器断电/上电 →
+    工具在 `tool_connect_timeout_s` 内出现 `CONNECT WITH CHIP SUCCESS` 才开始写；时序写进 `steps/burn-*.json`
+    的 `timing` 与 `reset_log.jsonl` 的事件行，`checks.connect_marker` 不过即 FAIL。默认仍是 `power_then_connect`。
+11. **一台台架的 approval_ref 不是重试许可证**：ledger 按 bench 记录，某台一旦 `write_started`，同一台换新
+    `approval_ref` 也一律拒绝（NOAH-267：每台最多 1 次，失败切下一台）。
 
 ## 基线验收（2026-11-10 / pvm1005）
 

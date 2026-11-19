@@ -35,6 +35,7 @@ FAMILIES = {"tcl", "midea", "generic"}
 STATUSES = {"measured", "draft"}
 CONTROL_KINDS = {"serial-relay", "external-script", "manual"}
 BOOT_METHODS = {"control-strap"}
+POWER_SEQUENCES = {"power_then_connect", "connect_then_power"}
 DRIVERS = {"venusa-uart", "hisi-burntool", "csk6-uart", "csk6-batch"}
 IMPLEMENTED_DRIVERS = {"venusa-uart", "hisi-burntool", "csk6-uart"}
 MD5 = re.compile(r"^0x[0-9a-fA-F]{32}$")
@@ -57,6 +58,36 @@ def _need(obj: dict, key: str, where: str) -> Any:
 
 def _is_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _validate_timing(timing: Any) -> None:
+    """``control.timing`` may declare the power/connect order, not only a hold.
+
+    Default is ``power_then_connect`` - power cycle first, then start the tool -
+    which is exactly the pre-2026-11-20 behaviour. ``connect_then_power`` starts
+    the tool first so it is already polling the burn port when the board leaves
+    reset, and therefore has to state how long it waits for the tool to connect.
+    """
+    if not isinstance(timing, dict):
+        raise ProfileError("control.timing must be an object")
+    sequence = timing.get("power_sequence")
+    if sequence is not None and str(sequence) not in POWER_SEQUENCES:
+        raise ProfileError(f"control.timing.power_sequence must be one of {sorted(POWER_SEQUENCES)}")
+    for key in ("tool_connect_lead_s", "post_power_wait_s"):
+        value = timing.get(key)
+        if value is not None and (not _is_number(value) or value < 0):
+            raise ProfileError(f"control.timing.{key} must be a non-negative number of seconds")
+    timeout = timing.get("tool_connect_timeout_s")
+    if timeout is not None and (not _is_number(timeout) or timeout <= 0):
+        raise ProfileError("control.timing.tool_connect_timeout_s must be a positive number of seconds")
+    if str(sequence or "") == "connect_then_power" and timeout is None:
+        raise ProfileError(
+            "control.timing.power_sequence=connect_then_power needs control.timing.tool_connect_timeout_s "
+            "(how long the tool may wait for CONNECT WITH CHIP SUCCESS after power returns)")
 
 
 def _walk(obj: Any, path: str = "") -> list[tuple[str, Any]]:
@@ -106,6 +137,11 @@ class Chip:
         # ROM download window before the tool opened the burn port).
         if burn.get("pre_power_cycle") is not None and not isinstance(burn.get("pre_power_cycle"), bool):
             raise ProfileError(f"{where}.burn.pre_power_cycle must be a boolean")
+        for key in ("connect_markers", "connect_failure_markers"):
+            value = burn.get(key)
+            if value is not None and not (
+                    isinstance(value, list) and all(isinstance(item, str) and item for item in value)):
+                raise ProfileError(f"{where}.burn.{key} must be a list of non-empty strings")
         if profile_status == "measured":
             self.tool_asset = str(_need(burn, "tool", f"{where}.burn"))
             self.image_asset = str(_need(burn, "image", f"{where}.burn"))
@@ -290,6 +326,8 @@ class Profile:
             unknown = set(commands) - CONTROL_KEYS
             if unknown:
                 raise ProfileError(f"control.commands has unknown keys: {sorted(unknown)}")
+            if control.get("timing") is not None:
+                _validate_timing(control.get("timing"))
             if raw["status"] == "measured":
                 strap_needed = any(
                     bool((chip or {}).get("boot", {}).get("required"))
@@ -405,6 +443,7 @@ class Profile:
                 "port": self.control.get("port"),
                 "baud": self.control.get("baud"),
                 "commands": dict(self.commands),
+                "timing": dict(self.control.get("timing") or {}),
             },
             "chips": [chip.describe() for chip in self.chips],
             "expected_ports": self.expected_ports(),

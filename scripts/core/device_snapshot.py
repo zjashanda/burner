@@ -148,8 +148,29 @@ def _resolve_snapshot(path: Path, doc: dict, targets: list[tuple[str, str, str |
     return roles
 
 
+IDENTITY_KEYS = ("bench_id", "usb_parent", "device_id", "location_path", "location_info")
+
+
+def _identity(doc: dict) -> dict:
+    """The physical identity a snapshot carries, when it carries one.
+
+    COM numbers are not an identity (NOAH-268 A3): both inventories keyed a
+    bench by ``usb_parent``/``LocationPath`` because only dev01 has a real USB
+    serial and Windows renumbers the rest on re-plug.
+    """
+    out: dict[str, str] = {}
+    for key in IDENTITY_KEYS:
+        value = doc.get(key)
+        if isinstance(value, str) and value.strip():
+            out[key] = value.strip()
+    bench = doc.get("bench")
+    if "bench_id" not in out and isinstance(bench, dict) and isinstance(bench.get("bench_id"), str):
+        out["bench_id"] = bench["bench_id"].strip()
+    return out
+
+
 def resolve_snapshot(path: Path, profile) -> dict:
-    """Return ``{source, schema, generated_at, mode, roles}`` or raise a hard error."""
+    """Return ``{source, schema, generated_at, mode, roles, identity}`` or raise a hard error."""
     path = Path(path)
     doc = _load(path)
     schema = doc.get("schema")
@@ -168,6 +189,7 @@ def resolve_snapshot(path: Path, profile) -> dict:
         "generated_at": generated if isinstance(generated, str) else "",
         "mode": mode,
         "roles": role_entries,
+        "identity": _identity(doc),
     }
 
 

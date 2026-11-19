@@ -41,6 +41,7 @@ burner/index/manifest.json → burner/index/index.json → 选中 capability →
 | `burn.recover-ftm-clear` | HISI 烧后 FTM 恢复 | `wf.burn.recover-only` | active |
 | `burn.port-asset-preflight` | 只读预检 | `wf.burn.preflight-only` | active |
 | `burn.csk6-hisi-dev01` | CSK6+HISI CH344 dev01 台架（win003/win005） | `wf.burn.csk6-hisi-dev01` | draft |
+| `burn.csk6-hisi-multi-bench` | 每节点 dev01–dev04 逐台轮换（一台一批准一 ledger） | `wf.burn.csk6-hisi-multi-bench` | draft |
 
 `midea-csk6` 只有 `burn.port-asset-preflight`：profile 是 `draft`，写阶段一律拒绝。
 
@@ -50,6 +51,13 @@ burner/index/manifest.json → burner/index/index.json → 选中 capability →
 同一 approval 只写一次、不重试，预门禁失败即设备零动作）。首跑回执 `commissioning.receipt.json`
 经 `promote` 生成 measured profile，写后字段（WRITE SIZE、设备 MD5、启动横幅、HISI signal_baud）不手填。
 判定拆成 7 项独立判定，整机结论取最差项（`kb-method-cad7be93134e`）。
+
+`burn.csk6-hisi-multi-bench`（v1.5.0）：`csk6-hisi-win003.json` / `csk6-hisi-win005.json` 各登记 4 台台架
+（`commissioning.benches[]`，端口来自 NOAH-268/269 只读清点）。每台一个 `approval_ref`
+（`NOAH-267-<node>-<bench>`）、一个 ledger（`%TEMP%\burner-<profile>-<node>-<bench_id>-commissioning.json`），
+`--bench` 选中一台，该台 `write_started` 之后换新 ref 也拒绝；`control.timing.power_sequence=connect_then_power`
+让工具先持有烧录口再上下电，时序证据落 `steps/burn-*.json` 的 `timing` 与 `reset_log.jsonl`。
+`promote` 只产出被选中那台的 measured profile。
 
 ## 5. 前置检查（任何写阶段之前）
 
