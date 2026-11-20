@@ -1,0 +1,317 @@
+{
+  "schema": "burner-profile/v1",
+  "name": "csk6-hisi-win005",
+  "node": "csk6-hisi-win005",
+  "nodes": [
+    "win005"
+  ],
+  "board_family": "generic",
+  "board": "CSK6 + HI3863(WS63) CH344 四串口台架 ×4（win005 dev01–dev04，module_only，逐台轮换 commissioning）",
+  "status": "draft",
+  "time_contract": "beijing-no-offset",
+  "preflight_window_s": 6,
+  "verified": null,
+  "port_map_reference": {
+    "note": "本 profile 只描述 win005 的 4 台台架，端口全部来自 NOAH-268 只读清点，禁止跨节点复用 COM。台架主键是 usb_parent：dev02–dev04 无真实 iSerial，COM 会随重插/换端口变化。换台、重插、重启后先重跑只读枚举，再用新版 profile 或 --device-snapshot（须带同一 bench_id / usb_parent）刷新端口。",
+    "source": [
+      "kb-knowledge-99ced0adc4e3",
+      "NOAH-267",
+      "NOAH-268"
+    ],
+    "identity": "usb_parent（dev01 可用真实 iSerial 交叉核对）",
+    "dev01_reference": {
+      "control": "COM15",
+      "csk6:log": "COM36",
+      "csk6:burn": "COM37",
+      "hisi:log": "COM39",
+      "hisi:burn": "COM39"
+    }
+  },
+  "control": {
+    "kind": "serial-relay",
+    "port": "COM15",
+    "baud": 115200,
+    "line_ending": "crlf",
+    "allow_tcl_commands": true,
+    "allow_tcl_commands_reason": "本台架沿用 uut-switch1 继电器作上下电；这是一条显式声明，不是从 tcl-pvm1005 继承的时序",
+    "commands": {
+      "power_cut": "uut-switch1.on",
+      "power_restore": "uut-switch1.off"
+    },
+    "receipt_tokens": {
+      "uut-switch1": "switch_idx1_set"
+    },
+    "receipt_fallback": "switch_idx1_set",
+    "forbidden_commands": [
+      "uut-reset",
+      "uut-csk-reset",
+      "uut-burn"
+    ],
+    "forbidden_reason": "uut-reset/uut-csk-reset/uut-burn 属于 win009/CSK6 专用命令集，本台架上下电只用 uut-switch1.on/off",
+    "timing": {
+      "power_sequence": "connect_then_power",
+      "cycle_hold_s": 3.0,
+      "tool_connect_lead_s": 2.0,
+      "tool_connect_timeout_s": 90,
+      "post_power_wait_s": 0
+    },
+    "timing_note": "power_sequence=connect_then_power：先启动 Uart_Burn_Tool 打开烧录口等待，lead 2 s 后 uut-switch1.on 断电、保持 cycle_hold_s=3 s、uut-switch1.off 上电，工具须在 tool_connect_timeout_s=90 s 内出现 CONNECT WITH CHIP SUCCESS 才开始写。NOAH-264/266 的 CONNECT CHIP OVERTIME 记录的是先上下电、板子已完整启动（AP Boot Ready / venus ap appliction）后工具才开串口，所以本次把连接时序显式声明；cycle_hold_s=3 s 沿用 NOAH-266 台架实测，lead/timeout 是本次声明初值，失败按回执 timing 调整，不改台架。"
+  },
+  "chips": [
+    {
+      "id": "csk6",
+      "chip": "CSK6 / VenusA（V40.x 固件线）",
+      "boot": {
+        "required": false,
+        "method": null,
+        "note": "Uart_Burn_Tool 自行完成进烧录模式；本台架未实测是否需要额外 boot strap，保持 required=false 直到节点证据推翻"
+      },
+      "transport": {
+        "log_port": "COM36",
+        "log_baud": 115200,
+        "burn_port": "COM37",
+        "burn_baud": 1500000
+      },
+      "burn": {
+        "driver": "csk6-uart",
+        "tool": "csk6-uart-burn-tool-v1.0.5",
+        "image": "csk6-v40.1.11-fw-img",
+        "package": "csk6-v40.1.11-package",
+        "image_addr": "0x000000",
+        "argv_template": [
+          "-b",
+          "{baud}",
+          "-p",
+          "{port}",
+          "-c",
+          "-t",
+          "10",
+          "-f",
+          "{image}",
+          "-l",
+          "-m",
+          "-d",
+          "-a",
+          "{addr}",
+          "-s"
+        ],
+        "success_markers": [
+          "CONNECT WITH CHIP SUCCESS",
+          "CHIP TYPE = 0x60120001",
+          "MD5 CHECK SUCCESS",
+          "FLASH 0x0 SECTOR DOWNLOAD SUCCESS"
+        ],
+        "expected_write_bytes": null,
+        "expected_md5": null,
+        "pre_power_cycle": true,
+        "timeout_s": 600,
+        "note": "工具=固件包内绑定的 Uart_Burn_Tool v1.0.5（83968 B，sha256 4bfdf680…，NOAH-260 实测；与 1.0.10 资产互不复用）；burn_baud/image_addr/argv 取自包内 CSK6_Burn.bat 原文；4 个成功标记待首跑在 v1.0.5 输出中原文核对；WRITE SIZE 与设备 MD5 只能写后获得；pre_power_cycle=true 来自 NOAH-264 首跑失败（COM34 11 次 CONNECT CHIP OVERTIME、COM35 6 s 0 字节），烧前先按 control.timing.cycle_hold_s 上下电并全程镜像 COM35 日志；power_sequence=connect_then_power 时，工具先开 COM 等待再上下电，CONNECT WITH CHIP SUCCESS / CONNECT CHIP OVERTIME 作为连接窗口证据计入 checks.connect_marker",
+        "connect_markers": [
+          "CONNECT WITH CHIP SUCCESS"
+        ],
+        "connect_failure_markers": [
+          "CONNECT CHIP OVERTIME"
+        ]
+      },
+      "verify": {
+        "version_key": "csk6_app",
+        "require_keys": [
+          "csk6_app"
+        ],
+        "require_lines": [
+          "AP Boot Ready"
+        ],
+        "expect": null,
+        "window_s": 120,
+        "note": "设备原文形如 venus ap appliction(V4.1.8@Nov 11 2026 12:27:56)；expect 必须写设备原文而不是包名，首跑后由 commissioning 回执回填"
+      },
+      "recover": {
+        "required": false,
+        "driver": "none",
+        "note": "CSK6 烧后无 FTM 工厂模式步骤；不做任何未实测的恢复动作"
+      }
+    },
+    {
+      "id": "hisi",
+      "chip": "HI3863 / WS63",
+      "boot": {
+        "required": false
+      },
+      "transport": {
+        "log_port": "COM39",
+        "log_baud": 1500000,
+        "burn_port": "COM39",
+        "burn_baud": null
+      },
+      "burn": {
+        "driver": "hisi-burntool",
+        "tool": "hisi-burntool-gold",
+        "image": "hisi-ws63-v40.1.11-all-fwpkg",
+        "chip_type": "13",
+        "signal_baud": null,
+        "onlyburn_parts": [
+          "root_loaderboot_sign.bin",
+          "root_params_sign.bin",
+          "ssb_sign.bin",
+          "flashboot_sign.bin",
+          "flashboot_backup_sign.bin",
+          "ws63_all_nv.bin",
+          "ws63-liteos-app-sign.bin",
+          "efuse_cfg.bin",
+          "ws63-liteos-mfg-sign.bin"
+        ],
+        "success_tokens": [
+          "成功",
+          "完成"
+        ],
+        "failure_tokens": [
+          "失败"
+        ],
+        "timeout_s": 420,
+        "note": "镜像=本包 HISI/ws63-liteos-app_all.fwpkg（3659152 B，sha256 d973c3c7…，NOAH-260）；onlyburn 9 个分区名来自该 fwpkg 内嵌清单，实际 -onlyburn 语法由首跑 argv/optLog 确认；signal_baud 只有写后才知道"
+      },
+      "verify": {
+        "version_key": "hisi_sys_ver",
+        "require_keys": [
+          "hisi_sys_ver"
+        ],
+        "expect": null,
+        "window_s": 120
+      },
+      "recover": {
+        "required": false,
+        "driver": "none",
+        "note": "本台架未实测 BurnTool 是否把 HISI 留在 FTM；在节点证据出现前不套用 TCL 的 AT+FTM=0"
+      }
+    }
+  ],
+  "measurement_required": [
+    "逐节点重新枚举 CH344 端口（win005 4 台台架），换台/重插后重跑；台架主键 usb_parent，COM 不是身份（kb-knowledge-99ced0adc4e3 / NOAH-268）",
+    "control 继电器命令与回执 token 现场核对（uut-switch1.on/off + switch_idx1_set），以及 control.timing.cycle_hold_s 实测值",
+    "control.timing 的 connect_then_power 实测：tool_connect_lead_s / tool_connect_timeout_s 是否让工具在 ROM 下载窗口内连上（回执 timing.connect_marker_seen）",
+    "CSK6 V40.1.11 的 expected_write_bytes（WRITE SIZE）与 expected_md5（设备 MD5），以及 4 个成功标记在 v1.0.5 输出中的原文核对",
+    "CSK6 verify.expect 的设备原文（venus ap appliction(V40.1.11@...)）与 verify.window_s 实测",
+    "HISI 的 signal_baud 与 onlyburn 实际语法（本包 9 个分区名已按 fwpkg 内嵌清单登记，argv/optLog 需写后确认）",
+    "HISI verify.expect 的设备原文与 verify.window_s 实测",
+    "把 status 升级为 measured 的节点实测证据（commissioning.receipt.json + burn/verify step receipt + 串口日志 + 8090 归档 URI），不得只凭代码通过"
+  ],
+  "commissioning": {
+    "approved_by": "郑保山",
+    "approval_ref": "NOAH-267",
+    "expires_at": "2026-11-26 23:59:59",
+    "pins": {
+      "csk6": {
+        "tool": {
+          "asset": "csk6-uart-burn-tool-v1.0.5",
+          "sha256": "4bfdf6800b32dc9fa7ed5e17f039dc1ea4a7f049c25acfc98f83e3dcfcf197bb"
+        },
+        "image": {
+          "asset": "csk6-v40.1.11-fw-img",
+          "sha256": "db0a618d570bcf258a47a011de735d25dcb2745c30bd741a73a25b7ff0362f6d"
+        }
+      },
+      "hisi": {
+        "tool": {
+          "asset": "hisi-burntool-gold",
+          "sha256": "4bd51bc3ee3e32c8da50698bb92b80a63f631dfa1d9cb1a412a1a5b4ba21cc0f"
+        },
+        "image": {
+          "asset": "hisi-ws63-v40.1.11-all-fwpkg",
+          "sha256": "d973c3c7ae6133228930d59e298d8db73cdc9185699f796d07cf0ccba4b8e8a2"
+        }
+      }
+    },
+    "allowed_steps": [
+      "burn:csk6",
+      "verify:csk6",
+      "burn:hisi",
+      "verify:hisi"
+    ],
+    "max_write_steps": 2,
+    "max_runs": 1,
+    "note": "批准来源：NOAH-267 Issue 正文（郑保山确认的轮换策略：win005 dev01→dev04 逐台，每台最多 1 次受控 commissioning，失败立即留证并切下一台、不重试）。benches 的 approval_ref 每台一条，格式 <父Issue>-<node>-<bench>；expires_at 是本改造声明的有效期（不是批准时间），过期须重新审批。每台一个 ledger（路径含 node + bench_id），同一台第二次运行一律拒绝。",
+    "benches": [
+      {
+        "bench_id": "dev01",
+        "node": "win005",
+        "serial": "USB\\VID_1A86&PID_55D5\\6&2e71c5&0&1",
+        "topology": "UNVERIFIED",
+        "control_port": "COM15",
+        "log_ports": {
+          "csk6": "COM36",
+          "hisi": "COM39"
+        },
+        "burn_ports": {
+          "csk6": "COM37",
+          "hisi": "COM39"
+        },
+        "approval_ref": "NOAH-267-win005-dev01",
+        "note": "NOAH-268 清点：HS04，control/端口与 kb-knowledge-99ced0adc4e3 一致（15/36/37/39）；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+      },
+      {
+        "bench_id": "dev02",
+        "node": "win005",
+        "serial": "USB\\VID_1A86&PID_55D5\\6&1655da82&0&1",
+        "topology": "UNVERIFIED",
+        "control_port": "COM41",
+        "log_ports": {
+          "csk6": "COM45",
+          "hisi": "COM43"
+        },
+        "burn_ports": {
+          "csk6": "COM44",
+          "hisi": "COM43"
+        },
+        "approval_ref": "NOAH-267-win005-dev02",
+        "note": "NOAH-268 清点：HS02，无 iSerial；台架主键 usb_parent，注意该串在 win003 dev03 上也出现，跨节点不可复用；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+      },
+      {
+        "bench_id": "dev03",
+        "node": "win005",
+        "serial": "USB\\VID_1A86&PID_55D5\\0123456789",
+        "topology": "UNVERIFIED",
+        "control_port": "COM35",
+        "log_ports": {
+          "csk6": "COM13",
+          "hisi": "COM12"
+        },
+        "burn_ports": {
+          "csk6": "COM14",
+          "hisi": "COM12"
+        },
+        "approval_ref": "NOAH-267-win005-dev03",
+        "note": "NOAH-268 清点：HS03，serial 是占位值 0123456789（与 win003 dev01 相同），只能当节点内标签，不是全局身份；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+      },
+      {
+        "bench_id": "dev04",
+        "node": "win005",
+        "serial": "USB\\VID_1A86&PID_55D5\\6&12e8226a&0&1",
+        "topology": "UNVERIFIED",
+        "control_port": "COM30",
+        "log_ports": {
+          "csk6": "COM29",
+          "hisi": "COM27"
+        },
+        "burn_ports": {
+          "csk6": "COM26",
+          "hisi": "COM27"
+        },
+        "approval_ref": "NOAH-267-win005-dev04",
+        "note": "NOAH-268 清点：HS05，无 iSerial；dev 标签按父 Hub 根口升序分配，未读物理丝印；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+      }
+    ]
+  },
+  "acceptance": {
+    "independent_items": [
+      "拓扑与设备存在性：先记录 topology=module_only / baseboard_present 与 baseboard_absent，再逐节点重新枚举端口",
+      "CSK6 烧录：WRITE SIZE + 设备 MD5 + 4 个标记 + exit 0",
+      "HISI 烧录：optLog 分区集与写结果",
+      "上下电后启动：串口实际字节数与启动横幅",
+      "120 s 稳定性：复位次数 / 间隔 / 异常行（module_only 下 13 s 周期复位记 EXPECTED_TOPOLOGY_BEHAVIOR）",
+      "资源监测：残留进程 / 句柄 / 可用内存",
+      "版本验收：设备原文 vs 包名原文"
+    ],
+    "rubric": "整机结论取最差项；任一 FAIL / NEEDS_REVIEW 不得被其他 PASS 抵消（kb-method-cad7be93134e）",
+    "differences_reference": "references/profile-contract.md#csk6--hisi-dev01-台架"
+  }
+}

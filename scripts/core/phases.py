@@ -23,8 +23,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .bench import BenchError, PortLogger, open_control, power_cycle, run_tool, send_control, serial_module
-from .commission import check_run_pins
+from .bench import (BenchError, PortLogger, open_control, power_cycle, run_tool,
+                    run_tool_watched, send_control, serial_module)
+from .commission import bench_device, check_run_pins
 from .contract import (SCHEMAS, TIME_CONTRACT, classify_asr, now_bj, parse_versions,
                        read_text_any, sha256_file)
 from .device_snapshot import com_number
@@ -322,6 +323,63 @@ def _burn_hisi(ctx: dict, chip) -> dict:
     }
 
 
+def _csk6_power_cycle(ctx: dict, chip, power: dict) -> dict:
+    handle = open_control(ctx["profile"])
+    try:
+        record = power_cycle(handle, ctx["profile"], f"burn:{chip.id}", ctx["audit"])
+    finally:
+        handle.close()
+    power["cycle"] = record
+    return record
+
+
+def _burn_csk6_tool(ctx: dict, chip, argv: list[str], tool: Path, burn: dict,
+                    pre_cycle: bool, sequence: str) -> tuple[dict, dict, dict]:
+    """Run the burn tool in the declared power/connect order and keep the timeline."""
+    timing_cfg = ctx["profile"].control.get("timing") or {}
+    timeout_s = float(burn.get("timeout_s", 600))
+    log_path = Path(ctx["run_dir"]) / "tool_logs" / f"tool_{chip.id}.log"
+    power: dict[str, Any] = {"pre_power_cycle": pre_cycle, "sequence": sequence}
+
+    if pre_cycle and sequence == "connect_then_power":
+        markers = list(burn.get("connect_markers") or ["CONNECT WITH CHIP SUCCESS"])
+        failures = list(burn.get("connect_failure_markers") or ["CONNECT CHIP OVERTIME"])
+        result = run_tool_watched(
+            argv, Path(tool).parent, log_path, timeout_s,
+            lead_s=float(timing_cfg.get("tool_connect_lead_s") or 0.0),
+            on_start=lambda: _csk6_power_cycle(ctx, chip, power),
+            connect_markers=markers, failure_markers=failures,
+            connect_timeout_s=float(timing_cfg.get("tool_connect_timeout_s") or 60.0))
+        # The tool already wrote its own log; keep the run dir layout identical.
+        power.update(result.get("power") or {})
+        power["connect"] = result["timing"]
+        power["timeline"] = result["timeline"]
+        for item in result["timeline"]:
+            detail = {key: value for key, value in item.items() if key != "event"}
+            ctx["audit"].event(f"burn:{chip.id}", str(item.get("event")), **detail)
+        return result, power, result["timing"]
+
+    if pre_cycle:
+        _csk6_power_cycle(ctx, chip, power)
+        wait = float(timing_cfg.get("post_power_wait_s") or 0.0)
+        if wait > 0:
+            power["post_power_wait_s"] = wait
+            time.sleep(wait)
+    result = run_tool(argv, Path(tool).parent, timeout_s)
+    started = ctx["audit"].event(f"burn:{chip.id}", "tool_started",
+                                 note="power_then_connect: the tool opens the burn port after the cycle")
+    timeline = [{"at": started["at"], "event": "tool_started"},
+                {"at": now_bj(), "event": "tool_exited", "rc": result["rc"]}]
+    timing = {"sequence": sequence, "tool_started_at": started["at"],
+              "power_done_at": ((power.get("cycle") or {}).get("restore") or {}).get("at", ""),
+              "tool_exited_at": timeline[-1]["at"]}
+    if pre_cycle:
+        power["timeline"] = timeline
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(result["output"], encoding="utf-8", newline="\n")
+    return result, power, timing
+
+
 def _burn_csk6(ctx: dict, chip) -> dict:
     """CSK6 CH344 bench: Uart_Burn_Tool writes the image, then evidence decides.
 
@@ -329,13 +387,17 @@ def _burn_csk6(ctx: dict, chip) -> dict:
     and device MD5 as well, because the CSK6 acceptance criterion is exactly
     those numbers plus the four markers plus exit 0.
 
-    ``burn.pre_power_cycle`` (opt-in, per chip) restarts the board right before
-    the tool opens the burn port *and* mirrors the chip's log port for the whole
-    run. The 2026-11-19 NOAH-264 first bring-up showed why both matter: the tool
-    retried ``CONNECT CHIP OVERTIME`` eleven times on a board that had not been
-    power cycled into the ROM download window, and the 6 s preflight window
-    captured zero log bytes, so the receipt could not tell "board unpowered"
-    from "wrong port". Without the flag the phase behaves exactly as before.
+    ``burn.pre_power_cycle`` (opt-in, per chip) restarts the board before the
+    write *and* mirrors the chip's log port for the whole run. The 2026-11-19
+    NOAH-264 first bring-up showed why both matter: the tool retried
+    ``CONNECT CHIP OVERTIME`` eleven times on a board that had not been power
+    cycled into the ROM download window, and the 6 s preflight window captured
+    zero log bytes, so the receipt could not tell "board unpowered" from "wrong
+    port". Which comes first - power or tool - is declared by
+    ``control.timing.power_sequence``: ``power_then_connect`` (default, the
+    pre-existing behaviour) or ``connect_then_power`` (tool opens the burn port
+    and waits, then the relay cycles power, then the tool connects). Without the
+    flag the phase behaves exactly as before.
     """
     tool = ctx["assets"].resolve(chip.tool_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
     image = ctx["assets"].resolve(chip.image_asset, ctx.get("material_dir"), ctx.get("cache_dir"))
@@ -344,29 +406,22 @@ def _burn_csk6(ctx: dict, chip) -> dict:
     argv = csk6_argv(tool, chip, image)
 
     pre_cycle = bool(burn.get("pre_power_cycle"))
+    timing_cfg = ctx["profile"].control.get("timing") or {}
+    sequence = str(timing_cfg.get("power_sequence") or "power_then_connect")
     logger = None
-    power: dict[str, Any] = {"pre_power_cycle": pre_cycle}
-    if pre_cycle:
-        if chip.log_port:
-            serial_log = Path(ctx["run_dir"]) / "serial_logs" / f"burn-{chip.id}.log"
-            logger = PortLogger(chip.log_port, int(chip.log_baud), serial_log)
-            logger.start()
-        handle = open_control(ctx["profile"])
-        try:
-            power["cycle"] = power_cycle(handle, ctx["profile"], f"burn:{chip.id}", ctx["audit"])
-        finally:
-            handle.close()
+    if pre_cycle and chip.log_port:
+        serial_log = Path(ctx["run_dir"]) / "serial_logs" / f"burn-{chip.id}.log"
+        logger = PortLogger(chip.log_port, int(chip.log_baud), serial_log)
+        logger.start()
 
     try:
-        result = run_tool(argv, Path(tool).parent, float(burn.get("timeout_s", 600)))
+        result, power, timing = _burn_csk6_tool(ctx, chip, argv, tool, burn, pre_cycle, sequence)
     finally:
         if logger is not None:
             logger.stop_event.set()
             time.sleep(0.8)
 
     log_path = Path(ctx["run_dir"]) / "tool_logs" / f"tool_{chip.id}.log"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.write_text(result["output"], encoding="utf-8", newline="\n")
     report = csk6_burn_checks(burn, result["output"], result["rc"])
     checks = dict(report["checks"])
     if pre_cycle:
@@ -378,6 +433,10 @@ def _burn_csk6(ctx: dict, chip) -> dict:
             power["serial_lines"] = len(logger.lines)
             power["serial_error"] = logger.error
         checks["power_receipts"] = cycle.get("verdict") == "PASS"
+        if sequence == "connect_then_power":
+            # The whole point of the sequence: the tool must have seen the chip
+            # enter the download window before it started writing.
+            checks["connect_marker"] = bool(timing.get("connect_marker_seen"))
     failed = sorted(name for name, value in checks.items() if value is not True)
     ok = all(value for value in checks.values() if value is not None)
     receipt = {
@@ -388,7 +447,7 @@ def _burn_csk6(ctx: dict, chip) -> dict:
         "tool_log": str(log_path), "markers": report["markers"],
         "write_size": report["write_size"], "expected_write_bytes": report["expected_write_bytes"],
         "device_md5": report["device_md5"], "expected_md5": report["expected_md5"],
-        "checks": checks,
+        "checks": checks, "timing": timing,
         "verdict": "PASS" if ok else "FAIL",
         "reason": "" if ok else f"CSK6 burn evidence did not match: {failed}",
     }
@@ -580,16 +639,21 @@ def phase_receipt(ctx: dict, state) -> dict:
 
     step_receipts: dict[str, Any] = {}
     versions: dict[str, Any] = {}
+    timing: dict[str, Any] = {}
     for step in completed:
         path = Path((state.data.get("receipts") or {}).get(step, ""))
         if path.is_file():
             payload = json.loads(path.read_text(encoding="utf-8"))
             step_receipts[step] = {"verdict": payload.get("verdict"), "path": str(path)}
+            if payload.get("timing"):
+                timing[step] = payload["timing"]
             if step.startswith("verify:") and payload.get("versions"):
                 versions[step.split(":", 1)[1]] = payload["versions"]
 
     assets_report = ctx["assets"].verify_all(profile.asset_ids(), ctx.get("material_dir"), ctx.get("cache_dir"))
     control_commands = _control_commands(run_dir)
+    power_commands = [entry for entry in control_commands if entry.get("command")]
+    bench = ctx.get("bench") or {}
     all_steps_done = len(completed) == len(expected_steps)
     ok = all_steps_done and assets_report["all_ok"]
     receipt = {
@@ -598,19 +662,25 @@ def phase_receipt(ctx: dict, state) -> dict:
         "profile": {"name": profile.name, "path": str(profile.path), "sha256": sha256_file(profile.path),
                     "status": profile.status, "family": profile.family},
         "time_contract": TIME_CONTRACT,
-        "commissioning": ({key: ctx["commissioning"].get(key) for key in
-                           ("approved_by", "approval_ref", "node", "device", "pins", "max_runs")}
+        "commissioning": ({**{key: ctx["commissioning"].get(key) for key in
+                              ("approved_by", "pins", "max_runs")},
+                           "approval_ref": bench.get("approval_ref") or ctx["commissioning"].get("approval_ref"),
+                           "node": bench.get("node") or ctx["commissioning"].get("node"),
+                           "bench_id": bench.get("bench_id"),
+                           "device": bench_device(bench) if bench else ctx["commissioning"].get("device")}
                           if ctx.get("commissioning") else None),
+        "bench": {key: bench.get(key) for key in ("bench_id", "node", "serial", "approval_ref")} if bench else None,
         "started_at": state.data.get("created_at") or now_bj(),
         "finished_at": now_bj(),
         "plan": plan,
         "completed_steps": completed,
         "step_receipts": step_receipts,
+        "timing": timing,
         "assets": assets_report,
         "versions": versions,
         "control_commands": control_commands,
         "writes": {
-            "power_or_strap_commands": len(control_commands),
+            "power_or_strap_commands": len(power_commands),
             "flashed_chips": [chip.id for chip in profile.chips
                               if any(step == f"burn:{chip.id}" for step in completed)],
         },

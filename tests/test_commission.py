@@ -20,11 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import burn as cli  # noqa: E402
+from core import bench as bench_module  # noqa: E402
 from core import commission as commission_module  # noqa: E402
+from core import phases as phases_module  # noqa: E402
 from core.assets import Assets  # noqa: E402
 from core.profile import Profile, ProfileError  # noqa: E402
 
 DEV01 = ROOT / "scripts" / "profiles" / "csk6-hisi-dev01.json"
+
+
+def no_serial():
+    raise AssertionError("this path must not touch serial")
 WRITE_SIZE = 5685248
 DEVICE_MD5 = "0xf6d6369435d52784efe1119ebd08f582"
 APPROVAL = json.loads(DEV01.read_text(encoding="utf-8"))["commissioning"]["approval_ref"]
@@ -104,6 +110,11 @@ def fake_receipt(ctx, state):
     return {"verdict": "PASS"}
 
 
+def no_device_action(ctx, reason):
+    """Stand-in for safe_recover: a unit test must never flip a real relay."""
+    return {"reason": reason, "skipped": True, "note": "unit test: no relay is driven"}
+
+
 def run_all(tmp: Path, raw: dict, node: str | None = NODE, extra: list[str] | None = None,
             **patches):
     path = write_profile(tmp, raw)
@@ -117,6 +128,7 @@ def run_all(tmp: Path, raw: dict, node: str | None = NODE, extra: list[str] | No
             mock.patch.object(cli, "phase_burn", patches.get("burn", fake_burn)), \
             mock.patch.object(cli, "phase_verify", patches.get("verify", fake_verify)), \
             mock.patch.object(cli, "phase_receipt", patches.get("receipt", fake_receipt)), \
+            mock.patch.object(cli, "safe_recover", patches.get("safe_recover", no_device_action)), \
             mock.patch.object(cli, "check_run_pins", patches.get("pins", lambda *a, **k: None)):
         return cli.main(argv), path
 
@@ -312,7 +324,9 @@ class CommissioningRunTests(unittest.TestCase):
                 calls.append(chip.id)
                 return fake_burn(ctx, chip)
 
-            code, _ = run_all(tmp, draft_raw(tmp), preflight=blocked, burn=tracking_burn)
+            with mock.patch.object(bench_module, "serial_module", no_serial), \
+                    mock.patch.object(phases_module, "serial_module", no_serial):
+                code, _ = run_all(tmp, draft_raw(tmp), preflight=blocked, burn=tracking_burn)
             self.assertEqual(code, 4)
             self.assertEqual(calls, [])
             self.assertFalse((tmp / "commissioning.receipt.json").is_file())

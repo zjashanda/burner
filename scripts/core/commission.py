@@ -40,9 +40,15 @@ class CommissionError(ProfileError):
 from .state import write_steps
 
 COMMISSION_SCHEMA = "burner-commissioning/v1"
-REQUIRED_KEYS = ("approved_by", "approval_ref", "node", "device", "pins",
-                 "allowed_steps", "max_write_steps", "max_runs")
+REQUIRED_KEYS = ("approved_by", "approval_ref", "pins", "allowed_steps", "max_write_steps", "max_runs")
+#: one approval covers one bench: either the legacy single ``device`` object or the
+#: multi-bench ``benches`` list, never both (a half-migrated block is ambiguous).
+SINGLE_KEYS = ("node", "device")
+BENCH_LIST_KEY = "benches"
 OPTIONAL_KEYS = ("expires_at", "approved_at", "note")
+BENCH_ENTRY_KEYS = {"bench_id", "node", "serial", "topology", "control_port",
+                    "burn_ports", "log_ports", "approval_ref", "note"}
+BENCH_ID = re.compile(r"^[a-z][a-z0-9_-]{1,23}$")
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 TIMING_KEYS = ("cut_to_strap_s", "strap_to_restore_s", "restore_to_strap_off_s", "cycle_hold_s")
 #: drivers that grade a run on the flash numbers (WRITE SIZE + device MD5).
@@ -78,18 +84,33 @@ def validate_block(raw: dict, status: str) -> dict | None:
             "promote the profile instead of re-opening commissioning")
     if not isinstance(block, dict):
         raise ProfileError("profile.commissioning must be an object")
-    unknown = set(block) - set(REQUIRED_KEYS) - set(OPTIONAL_KEYS)
+    unknown = set(block) - set(REQUIRED_KEYS) - set(SINGLE_KEYS) - {BENCH_LIST_KEY} - set(OPTIONAL_KEYS)
     if unknown:
         raise ProfileError(f"profile.commissioning has unknown keys: {sorted(unknown)}")
     missing = [key for key in REQUIRED_KEYS if key not in block]
     if missing:
         raise ProfileError(
             f"profile.commissioning is missing {missing}; a first run must pin the approver, "
-            "the approval reference, one node, one device and every tool/image sha256")
-    for key in ("approved_by", "approval_ref", "node"):
+            "the approval reference, every tool/image sha256 and the write budget")
+    for key in ("approved_by", "approval_ref"):
         if not str(block.get(key) or "").strip():
-            raise ProfileError(f"profile.commissioning.{key} must name the approver / approval reference / node")
-    _validate_device(block["device"])
+            raise ProfileError(f"profile.commissioning.{key} must name the approver / approval reference")
+    if ("device" in block) == (BENCH_LIST_KEY in block):
+        raise ProfileError(
+            "profile.commissioning must declare exactly one of 'device' (one bench, legacy) or "
+            "'benches' (one entry per bench, each with its own approval_ref)")
+
+    declared_nodes = [str(item) for item in (raw.get("nodes") or []) if str(item).strip()]
+    if "device" in block:
+        if not str(block.get("node") or "").strip():
+            raise ProfileError("profile.commissioning.node must name the one approved host")
+        if declared_nodes and str(block["node"]) not in declared_nodes:
+            raise ProfileError(
+                f"profile.commissioning.node {block['node']!r} is not one of the profile's nodes {declared_nodes}")
+        _validate_device(block["device"])
+    else:
+        _validate_benches(block, declared_nodes)
+
     _validate_pins(block["pins"])
     steps = block.get("allowed_steps")
     if not (isinstance(steps, list) and steps and all(isinstance(item, str) and item for item in steps)):
@@ -118,7 +139,7 @@ def validate_block(raw: dict, status: str) -> dict | None:
 def _validate_device(device: Any) -> None:
     if not isinstance(device, dict):
         raise ProfileError("profile.commissioning.device must be an object naming the one bench")
-    unknown = set(device) - {"serial", "topology", "control_port", "burn_ports", "note"}
+    unknown = set(device) - {"serial", "topology", "control_port", "burn_ports", "note", "bench_id", "log_ports"}
     if unknown:
         raise ProfileError(f"profile.commissioning.device has unknown keys: {sorted(unknown)}")
     if not str(device.get("serial") or "").strip():
@@ -131,6 +152,71 @@ def _validate_device(device: Any) -> None:
     for chip_id, port in ports.items():
         if not _port_digits(port):
             raise ProfileError(f"profile.commissioning.device.burn_ports.{chip_id} must be COMx")
+    _validate_log_ports(device, "commissioning.device")
+
+
+def _validate_log_ports(entry: dict, where: str) -> None:
+    logs = entry.get("log_ports")
+    if logs is None:
+        return
+    if not isinstance(logs, dict) or not logs:
+        raise ProfileError(f"profile.{where}.log_ports must map every chip id to its log port")
+    for chip_id, port in logs.items():
+        if not _port_digits(port):
+            raise ProfileError(f"profile.{where}.log_ports.{chip_id} must be COMx")
+
+
+def _validate_benches(block: dict, declared_nodes: list[str]) -> None:
+    """Each bench is a separate approval: own id, own node, own ports, own approval_ref."""
+    benches = block.get("benches")
+    if not isinstance(benches, list) or not benches:
+        raise ProfileError("profile.commissioning.benches must be a non-empty list of bench entries")
+    ids: list[str] = []
+    refs: list[str] = []
+    for index, entry in enumerate(benches):
+        where = f"profile.commissioning.benches[{index}]"
+        if not isinstance(entry, dict):
+            raise ProfileError(f"{where} must be an object")
+        unknown = set(entry) - BENCH_ENTRY_KEYS
+        if unknown:
+            raise ProfileError(f"{where} has unknown keys: {sorted(unknown)}")
+        missing = [key for key in ("bench_id", "node", "serial", "control_port", "burn_ports", "approval_ref")
+                   if key not in entry]
+        if missing:
+            raise ProfileError(
+                f"{where} is missing {missing}; every bench pins its id, host, device identity, "
+                "control/burn ports and its own approval_ref")
+        bench_id = str(entry.get("bench_id") or "").strip()
+        if not BENCH_ID.match(bench_id):
+            raise ProfileError(f"{where}.bench_id must match {BENCH_ID.pattern}, got {bench_id!r}")
+        ids.append(bench_id)
+        node = str(entry.get("node") or "").strip()
+        if not node:
+            raise ProfileError(f"{where}.node must name the host this bench is wired to")
+        if declared_nodes and node not in declared_nodes:
+            raise ProfileError(f"{where}.node {node!r} is not one of the profile's nodes {declared_nodes}")
+        if not str(entry.get("serial") or "").strip():
+            raise ProfileError(
+                f"{where}.serial must pin the device identity (usb_parent / USB serial); "
+                "COM numbers are not an identity")
+        if not _port_digits(entry.get("control_port")):
+            raise ProfileError(f"{where}.control_port must be COMx")
+        ports = entry.get("burn_ports")
+        if not isinstance(ports, dict) or not ports:
+            raise ProfileError(f"{where}.burn_ports must map every written chip id to its port")
+        for chip_id, port in ports.items():
+            if not _port_digits(port):
+                raise ProfileError(f"{where}.burn_ports.{chip_id} must be COMx")
+        _validate_log_ports(entry, f"commissioning.benches[{index}]")
+        ref = str(entry.get("approval_ref") or "").strip()
+        if not ref:
+            raise ProfileError(f"{where}.approval_ref must name this bench's own approval reference")
+        refs.append(ref)
+    for label, values in (("bench_id", ids), ("approval_ref", refs)):
+        duplicated = sorted({value for value in values if values.count(value) > 1})
+        if duplicated:
+            raise ProfileError(
+                f"profile.commissioning.benches repeats {label} {duplicated}; every bench needs its own")
 
 
 def _validate_pins(pins: Any) -> None:
@@ -158,8 +244,66 @@ def _validate_pins(pins: Any) -> None:
 # ---------------------------------------------------------------- guard
 
 
+def select_bench(block: dict, bench_id: str | None) -> dict:
+    """Return the one bench this run may drive, or refuse.
+
+    A legacy single-``device`` block stays exactly as it was: one bench, no
+    selector. A ``benches`` block demands an explicit ``--bench`` because one
+    approval covers one bench and nothing may be inferred from port numbers.
+    """
+    benches = block.get(BENCH_LIST_KEY)
+    if benches:
+        known = [str(item["bench_id"]) for item in benches]
+        wanted = str(bench_id or "").strip()
+        if not wanted:
+            raise CommissionError(
+                f"this profile commissions {len(benches)} benches ({known}); "
+                "--bench <bench_id> picks exactly one (one approval per bench)")
+        for entry in benches:
+            if str(entry["bench_id"]) == wanted:
+                return {**entry, "multi": True}
+        raise CommissionError(f"--bench {wanted!r} is not one of this profile's benches {known}")
+    if bench_id:
+        raise CommissionError(
+            f"this profile's commissioning block covers one device only; --bench {bench_id!r} does not apply")
+    device = block["device"]
+    return {
+        "bench_id": str(device.get("bench_id") or "dev01"),
+        "node": str(block["node"]),
+        "serial": str(device.get("serial")),
+        "topology": device.get("topology"),
+        "control_port": str(device.get("control_port")),
+        "burn_ports": dict(device.get("burn_ports") or {}),
+        "log_ports": dict(device.get("log_ports") or {}),
+        "approval_ref": str(block["approval_ref"]),
+        "raw_device": dict(device),
+        "multi": False,
+    }
+
+
+def apply_bench(profile, bench: dict) -> None:
+    """Point this run at the selected bench's declared ports.
+
+    Only a multi-bench entry is applied: for a legacy single-``device`` block the
+    profile already declares the ports and the guard compares the approval
+    against them (applying it would make that comparison vacuous). For a real
+    bench entry the ports *are* the approval, so the run drives exactly them.
+    """
+    if not bench.get("multi"):
+        return
+    profile.control["port"] = str(bench["control_port"])
+    for chip in profile.chips:
+        port = (bench.get("burn_ports") or {}).get(chip.id)
+        if port:
+            chip.transport["burn_port"] = str(port)
+        log_port = (bench.get("log_ports") or {}).get(chip.id)
+        if log_port:
+            chip.transport["log_port"] = str(log_port)
+
+
 def guard_write(profile: Profile, steps: list[str], plan: list[str], approval_ref: str | None,
-                confirm_write: bool) -> list[str]:
+                confirm_write: bool, bench_id: str | None = None,
+                snapshot: dict | None = None) -> list[str]:
     """Refuse write steps unless the normal guard passes or commissioning does.
 
     Returns the write steps this run is about to execute (empty for read-only
@@ -176,6 +320,8 @@ def guard_write(profile: Profile, steps: list[str], plan: list[str], approval_re
         if approval_ref:
             raise CommissionError(
                 f"profile {profile.name} is already measured; drop --commission and use --confirm-write")
+        if bench_id:
+            raise CommissionError("--bench only selects a bench of a draft profile's commissioning block")
         if not confirm_write:
             raise CommissionError(f"steps {writes} change power/flash state; re-run with --confirm-write")
         return writes
@@ -189,12 +335,13 @@ def guard_write(profile: Profile, steps: list[str], plan: list[str], approval_re
     if not block:
         raise CommissionError(
             f"profile {profile.name} is draft and has no commissioning block; "
-            "add approved_by / approval_ref / node / device / pins / allowed_steps / max_write_steps / max_runs "
-            "before a first run")
-    if approval_ref.strip() != str(block["approval_ref"]).strip():
+            "add approved_by / approval_ref / pins / allowed_steps / max_write_steps / max_runs "
+            "and either one device or one benches[] entry per bench before a first run")
+    bench = select_bench(block, bench_id)
+    if approval_ref.strip() != str(bench["approval_ref"]).strip():
         raise CommissionError(
-            f"--commission {approval_ref!r} does not match the profile's approval_ref "
-            f"{block['approval_ref']!r}")
+            f"--commission {approval_ref!r} does not match bench {bench['bench_id']!r}'s approval_ref "
+            f"{bench['approval_ref']!r}")
     unknown_steps = [step for step in steps if step not in plan]
     if unknown_steps:
         raise CommissionError(f"steps {unknown_steps} are not part of this profile's plan {plan}")
@@ -206,31 +353,65 @@ def guard_write(profile: Profile, steps: list[str], plan: list[str], approval_re
             f"commissioning allows at most {block['max_write_steps']} write step(s), this run would run {writes}")
     if not confirm_write:
         raise CommissionError(f"steps {writes} change power/flash state; re-run with --confirm-write")
-    check_bench(profile, block)
+    check_bench(profile, block, bench, snapshot)
     return writes
 
 
-def check_bench(profile: Profile, block: dict) -> None:
-    """The approval only covers one node and one device - prove it still matches."""
+def _norm_identity(value: Any) -> str:
+    return " ".join(str(value or "").replace("\t", " ").split()).upper()
+
+
+def _ident(snapshot: dict | None) -> dict:
+    raw = (snapshot or {}).get("identity") or {}
+    return {str(key): str(value).strip() for key, value in raw.items()
+            if isinstance(value, str) and value.strip()}
+
+
+def check_bench(profile: Profile, block: dict, bench: dict | None = None,
+                snapshot: dict | None = None) -> dict:
+    """The approval covers one bench - prove this run still drives that bench.
+
+    Ports are compared against the approval. The one exception is an explicit
+    ``--device-snapshot`` that names the *same physical device* (bench_id or
+    usb_parent): Windows renumbers COM ports on re-plug, and NOAH-268/269 both
+    recorded that only ``usb_parent``/``LocationPath`` is a stable identity, so a
+    matching snapshot is accepted as a port refresh and recorded as such. A
+    snapshot for another bench, or one carrying no identity, is refused.
+    """
+    if bench is None:
+        bench = select_bench(block, None)
+    node = str(bench.get("node") or "")
     declared = profile.raw.get("nodes")
-    if isinstance(declared, list) and declared and str(block["node"]) not in [str(item) for item in declared]:
+    if isinstance(declared, list) and declared and node not in [str(item) for item in declared]:
         raise CommissionError(
-            f"commissioning was approved for node {block['node']!r}, but this bench declares {declared}")
-    device = block["device"]
-    approved_control = _port_digits(device.get("control_port"))
+            f"commissioning was approved for node {node!r}, but this bench declares {declared}")
+
+    drift: list[tuple[str, str, str]] = []
+    approved_control = _port_digits(bench.get("control_port"))
     actual_control = _port_digits(profile.control.get("port"))
     if approved_control != actual_control:
-        raise CommissionError(
-            f"commissioning pinned control port COM{approved_control}, this run would drive COM{actual_control}")
+        drift.append(("control", approved_control, actual_control))
     for chip in profile.chips:
-        approved = _port_digits((device.get("burn_ports") or {}).get(chip.id))
+        approved = _port_digits((bench.get("burn_ports") or {}).get(chip.id))
         actual = _port_digits(chip.transport.get("burn_port"))
         if not approved:
             raise CommissionError(
-                f"commissioning does not pin a burn port for chip {chip.id}; one device means every port is named")
+                f"commissioning does not pin a burn port for chip {chip.id}; one bench means every port is named")
         if approved != actual:
+            drift.append((f"{chip.id} burn", approved, actual))
+    ports: dict[str, str] = {"control": str(profile.control.get("port"))}
+    for chip in profile.chips:
+        ports[f"{chip.id}:burn"] = str(chip.transport.get("burn_port"))
+
+    refreshed: dict | None = None
+    if drift:
+        what, approved, actual = drift[0]
+        if not bench.get("multi"):
+            # legacy single bench: the approval is compared, not refreshed
             raise CommissionError(
-                f"commissioning pinned {chip.id} burn port COM{approved}, this run would write on COM{actual}")
+                f"commissioning pinned {what} port COM{approved}, this run would drive COM{actual}")
+        refreshed = _snapshot_refresh(bench, snapshot, drift)
+
     for chip in profile.chips:
         pin = _pin(block, chip)
         if not pin:
@@ -243,6 +424,44 @@ def check_bench(profile: Profile, block: dict) -> None:
             if want != str(have):
                 raise CommissionError(
                     f"commissioning pins {chip.id} {kind} {want!r}, the profile would use {have!r}")
+    return {"bench_id": str(bench["bench_id"]), "node": node,
+            "approval_ref": str(bench["approval_ref"]), "ports": ports,
+            "pinned_control_port": str(bench.get("control_port")),
+            "ports_refreshed_from_snapshot": refreshed is not None, **(refreshed or {})}
+
+
+def _snapshot_refresh(bench: dict, snapshot: dict | None, drift: list[tuple[str, str, str]]) -> dict:
+    """Accept renumbered COM ports only for the same physical bench.
+
+    Windows renumbers COM ports on re-plug and only dev01 has a real USB serial
+    (NOAH-268 A3), so the port numbers cannot be the pin. A snapshot that names
+    the same ``bench_id`` (or the same ``usb_parent``) is accepted as a refresh
+    and recorded; anything else - another bench, or no identity at all - is
+    refused instead of silently writing to whatever COM happened to move.
+    """
+    what, approved, actual = drift[0]
+    if not snapshot:
+        raise CommissionError(
+            f"bench {bench['bench_id']} pinned {what} port COM{approved}, this run would drive COM{actual}; "
+            "re-enumerate this bench and pass a --device-snapshot that names the same bench_id/usb_parent")
+    ident = _ident(snapshot)
+    bench_id = ident.get("bench_id", "")
+    serial = _norm_identity(bench.get("serial"))
+    seen = _norm_identity(ident.get("usb_parent") or ident.get("device_id"))
+    if not bench_id and not seen:
+        raise CommissionError(
+            "the device snapshot names no bench identity (bench_id / usb_parent); refusing to use it "
+            "to renumber the approved ports - re-enumerate and update this bench's profile entry instead")
+    if bench_id and bench_id != str(bench["bench_id"]):
+        raise CommissionError(
+            f"the device snapshot is for bench {bench_id!r}, this approval covers {bench['bench_id']!r}")
+    if seen and serial and seen != serial:
+        raise CommissionError(
+            f"the device snapshot says usb_parent {seen}, this bench's approval pins {serial}")
+    return {"snapshot": str(snapshot.get("source") or ""), "identity": ident,
+            "ported_from": {name: {"pinned": f"COM{pin}", "snapshot": f"COM{got}"}
+                            for name, pin, got in drift}}
+
 
 
 def check_manifest_pins(profile: Profile, block: dict, assets) -> None:
@@ -266,23 +485,36 @@ def check_manifest_pins(profile: Profile, block: dict, assets) -> None:
 # ------------------------------------------------------------------ one shot
 
 
-def ledger_path(profile: Profile, approved_node: str | None = None) -> Path:
-    """Node-level record of the commissioning attempt.
+def _bench_key(bench: dict | None) -> str:
+    """``-dev02`` for a multi-bench profile; empty for the legacy single block.
+
+    The legacy name is kept byte-for-byte so an approval already spent before
+    this change (NOAH-263 / NOAH-266) is still seen as spent.
+    """
+    if not bench or not bench.get("multi"):
+        return ""
+    bench_id = str(bench.get("bench_id") or "").strip()
+    return f"-{bench_id}" if bench_id else ""
+
+
+def ledger_path(profile: Profile, approved_node: str | None = None, bench: dict | None = None) -> Path:
+    """Per-bench record of the commissioning attempt.
 
     Same directory as the bench lock (``profile.lock_path`` when the bench
     declares one, otherwise the per-node temp dir), keyed by the approved host
-    so a second run on the same node sees it.
+    and - for a multi-bench profile - the bench id, so four benches on one node
+    never share one ledger.
     """
     lock = profile.raw.get("lock_path")
     import tempfile  # noqa: PLC0415 - only needed for the default
 
     base = Path(lock).parent if lock else Path(tempfile.gettempdir())
     node = approved_node or profile.node
-    return base / f"burner-{profile.node}-{node}-commissioning.json"
+    return base / f"burner-{profile.node}-{node}{_bench_key(bench)}-commissioning.json"
 
 
-def ledger_state(profile: Profile, approved_node: str | None = None) -> dict:
-    path = ledger_path(profile, approved_node)
+def ledger_state(profile: Profile, approved_node: str | None = None, bench: dict | None = None) -> dict:
+    path = ledger_path(profile, approved_node, bench)
     if not path.is_file():
         return {}
     try:
@@ -292,26 +524,37 @@ def ledger_state(profile: Profile, approved_node: str | None = None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def assert_not_used(profile: Profile, block: dict) -> None:
-    """A first run happens once; the approval is not a retry licence."""
-    state = ledger_state(profile, str(block["node"]))
-    ref = str(block["approval_ref"]).strip()
-    if state.get("approval_ref") == ref and state.get("write_started"):
-        raise CommissionError(
-            f"commissioning {ref} already wrote on {state.get('write_started')} "
-            f"(run_dir {state.get('run_dir')!r}); a first run is never repeated and no automatic retry is allowed. "
-            "A new approval_ref is required")
+def assert_not_used(profile: Profile, block: dict, bench: dict | None = None) -> None:
+    """A first run happens once per bench; the approval is not a retry licence."""
+    if bench is None:
+        bench = select_bench(block, None)
+    state = ledger_state(profile, str(bench["node"]), bench)
+    if not state.get("write_started"):
+        return
+    spent = str(state.get("approval_ref") or "")
+    ref = str(bench["approval_ref"]).strip()
+    which = f"{spent}" if spent.strip() == ref else f"{spent} (this profile now names {ref})"
+    raise CommissionError(
+        f"bench {bench['bench_id']} already started a write on {state['write_started']} under approval "
+        f"{which} (run_dir {state.get('run_dir')!r}); a bench is commissioned once and no automatic retry is "
+        "allowed - a new approval_ref cannot re-open it. Move to the next bench; re-running this one needs a "
+        "human decision about why it failed")
 
 
 def consume(profile: Profile, block: dict, run_dir: Path, stage: str = "write_started",
-            extra: dict | None = None) -> Path:
-    """Record that this approval is now spent, before the write touches the device."""
-    path = ledger_path(profile, str(block["node"]))
-    state = ledger_state(profile, str(block["node"]))
-    state.setdefault("node", str(block["node"]))
-    state.setdefault("approval_ref", str(block["approval_ref"]))
-    state.setdefault("approved_by", str(block["approved_by"]))
-    state.setdefault("device", block.get("device"))
+            extra: dict | None = None, bench: dict | None = None) -> Path:
+    """Record that this bench's approval is now spent, before the write touches the device."""
+    if bench is None:
+        bench = select_bench(block, None)
+    path = ledger_path(profile, str(bench["node"]), bench)
+    state = ledger_state(profile, str(bench["node"]), bench)
+    state["node"] = str(bench["node"])
+    state["bench_id"] = str(bench["bench_id"])
+    # Assigned, never setdefault: the record must name the approval this bench
+    # actually spent, not the first ref that ever touched this file.
+    state["approval_ref"] = str(bench["approval_ref"])
+    state["approved_by"] = str(block["approved_by"])
+    state["device"] = bench_device(bench)
     state[stage] = now_bj()
     state["run_dir"] = str(run_dir)
     for key, value in (extra or {}).items():
@@ -390,8 +633,22 @@ def _control_hold(run_dir: Path) -> dict[str, Any]:
     return {"cycle_hold_s": round(min(holds), 3) if holds else None, "samples": len(holds)}
 
 
-def measurement_from_run(run_dir: Path, profile: Profile, block: dict) -> dict[str, Any]:
+def bench_device(bench: dict) -> dict:
+    """The device projection recorded in the ledger and the measurement receipt."""
+    if not bench.get("multi") and isinstance(bench.get("raw_device"), dict):
+        return dict(bench["raw_device"])
+    return {"serial": str(bench.get("serial") or ""),
+            "topology": bench.get("topology"),
+            "control_port": bench.get("control_port"),
+            "burn_ports": dict(bench.get("burn_ports") or {}),
+            "log_ports": dict(bench.get("log_ports") or {})}
+
+
+def measurement_from_run(run_dir: Path, profile: Profile, block: dict,
+                         bench: dict | None = None) -> dict[str, Any]:
     """Collect one commissioning run into its measured-candidate document."""
+    if bench is None:
+        bench = select_bench(block, None)
     burns: list[dict] = []
     verifies: list[dict] = []
     for payload in _read_steps(run_dir):
@@ -412,6 +669,7 @@ def measurement_from_run(run_dir: Path, profile: Profile, block: dict) -> dict[s
                 "optlog": payload.get("optlog"), "optlog_sha256": payload.get("optlog_sha256"),
                 "optlog_bytes": payload.get("optlog_bytes"),
                 "power": payload.get("power"),
+                "timing": payload.get("timing"),
                 "tool_result": payload.get("tool_result"),
             })
         elif step.startswith("verify:"):
@@ -450,15 +708,21 @@ def measurement_from_run(run_dir: Path, profile: Profile, block: dict) -> dict[s
     return {
         "schema": COMMISSION_SCHEMA,
         "created_at": now_bj(),
-        "node": block.get("node") or profile.node,
-        "device": block.get("device"),
+        "node": bench.get("node") or block.get("node") or profile.node,
+        "bench": {"bench_id": str(bench["bench_id"]), "serial": str(bench.get("serial") or ""),
+                  "approval_ref": str(bench["approval_ref"]), "multi": bool(bench.get("multi"))},
+        "device": bench_device(bench),
         "pins": block.get("pins"),
         "profile": {"name": profile.name, "path": str(profile.path),
                     "sha256": sha256_file(profile.path), "status": profile.status},
-        "commissioning": {key: block.get(key) for key in REQUIRED_KEYS},
+        "commissioning": {**{key: block.get(key) for key in REQUIRED_KEYS},
+                          "approval_ref": str(bench["approval_ref"])},
         "burns": burns,
         "verifies": verifies,
         "control": {"cycle_hold_s": blocks, "samples": hold.get("samples", 0),
+                    "power_sequence": str((profile.control.get("timing") or {}).get("power_sequence")
+                                          or "power_then_connect"),
+                    "timings": [burn.get("timing") for burn in burns if burn.get("timing")],
                     "source": str(Path(run_dir) / "reset_log.jsonl"),
                     "commands": _control_commands(run_dir)},
         "resources": _resources(run_dir, burns),
@@ -531,8 +795,8 @@ def _resources(run_dir: Path, burns: list[dict]) -> dict[str, Any]:
     }
 
 
-def write_measurement(run_dir: Path, profile: Profile, block: dict) -> Path:
-    payload = measurement_from_run(run_dir, profile, block)
+def write_measurement(run_dir: Path, profile: Profile, block: dict, bench: dict | None = None) -> Path:
+    payload = measurement_from_run(run_dir, profile, block, bench)
     path = Path(run_dir) / "commissioning.receipt.json"
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
     return path
@@ -571,14 +835,32 @@ def promote_profile(profile_path: Path, measurement_path: Path, out_path: Path) 
     if measurement.get("schema") != COMMISSION_SCHEMA:
         raise ProfileError(f"measurement schema must be {COMMISSION_SCHEMA}, got {measurement.get('schema')!r}")
     recorded = (measurement.get("commissioning") or {}).get("approval_ref")
-    if str(recorded or "").strip() != str(block["approval_ref"]).strip():
-        raise ProfileError(
-            f"measurement approval_ref {recorded!r} does not match the profile's {block['approval_ref']!r}")
-    if str(measurement.get("node") or "") != str(block["node"]):
-        raise ProfileError(
-            f"measurement was taken on node {measurement.get('node')!r}, the approval names {block['node']!r}")
-    if (measurement.get("device") or {}) != (block.get("device") or {}):
-        raise ProfileError("measurement device does not match the device this approval pinned")
+    benches = block.get(BENCH_LIST_KEY)
+    if benches:
+        matches = [item for item in benches
+                   if str(item["approval_ref"]).strip() == str(recorded or "").strip()]
+        if not matches:
+            raise ProfileError(
+                f"measurement approval_ref {recorded!r} is not one of this profile's bench approvals "
+                f"{[str(item['approval_ref']) for item in benches]}")
+        bench = {**matches[0], "multi": True}
+        if str(measurement.get("node") or "") != str(bench["node"]):
+            raise ProfileError(
+                f"measurement was taken on node {measurement.get('node')!r}, "
+                f"bench {bench['bench_id']!r} is wired to {bench['node']!r}")
+        if (measurement.get("device") or {}) != bench_device(bench):
+            raise ProfileError(
+                f"measurement device does not match bench {bench['bench_id']!r} (serial/ports/topology)")
+    else:
+        bench = select_bench(block, None)
+        if str(recorded or "").strip() != str(block["approval_ref"]).strip():
+            raise ProfileError(
+                f"measurement approval_ref {recorded!r} does not match the profile's {block['approval_ref']!r}")
+        if str(measurement.get("node") or "") != str(block["node"]):
+            raise ProfileError(
+                f"measurement was taken on node {measurement.get('node')!r}, the approval names {block['node']!r}")
+        if (measurement.get("device") or {}) != (block.get("device") or {}):
+            raise ProfileError("measurement device does not match the device this approval pinned")
     if (measurement.get("pins") or {}) != (block.get("pins") or {}):
         raise ProfileError("measurement pins do not match the tool/image sha256 this approval pinned")
     measured_sha = str((measurement.get("profile") or {}).get("sha256") or "")
@@ -586,6 +868,21 @@ def promote_profile(profile_path: Path, measurement_path: Path, out_path: Path) 
         raise ProfileError("measurement was taken from a different profile file (sha256 mismatch); re-measure")
 
     raw = copy.deepcopy(profile.raw)
+    if bench.get("multi"):
+        # One measured profile describes one bench: pin the measured bench's own
+        # ports, drop the sibling approvals, and keep the per-node lock name so
+        # two benches on one host never run at the same time.
+        raw["name"] = f"{profile.name}-{bench['bench_id']}"
+        raw["board"] = f"{raw.get('board')} · bench {bench['bench_id']} ({bench['node']})"
+        raw["nodes"] = [str(bench["node"])]
+        raw["control"]["port"] = str(bench["control_port"])
+        for chip_raw in raw["chips"]:
+            burn_port = (bench.get("burn_ports") or {}).get(chip_raw["id"])
+            if burn_port:
+                chip_raw["transport"]["burn_port"] = str(burn_port)
+            log_port = (bench.get("log_ports") or {}).get(chip_raw["id"])
+            if log_port:
+                chip_raw["transport"]["log_port"] = str(log_port)
     missing: list[str] = []
     for chip_raw in raw["chips"]:
         chip_id = chip_raw["id"]
@@ -668,6 +965,7 @@ def promote_profile(profile_path: Path, measurement_path: Path, out_path: Path) 
     }
 
 
-__all__ = ["COMMISSION_SCHEMA", "CommissionError", "validate_block", "guard_write", "check_bench",
+__all__ = ["COMMISSION_SCHEMA", "CommissionError", "validate_block", "select_bench", "apply_bench",
+           "guard_write", "check_bench", "bench_device",
            "check_manifest_pins", "check_run_pins", "ledger_path", "ledger_state", "assert_not_used",
            "consume", "measurement_from_run", "write_measurement", "promote_profile", "TIMING_KEYS"]

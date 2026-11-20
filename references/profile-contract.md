@@ -39,6 +39,20 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
 `timing`（measured 的 serial-relay 必填，单位秒）：`cut_to_strap_s`、`strap_to_restore_s`、
 `restore_to_strap_off_s`、`restore_to_verify_s`、`cycle_hold_s`。
 
+电源/连接时序（draft 与 measured 都校验形状）：
+
+| 字段 | 说明 |
+|---|---|
+| `power_sequence` | `power_then_connect`（默认，先上下电再启动工具，等价旧行为）或 `connect_then_power`（先启动工具打开烧录口等待 → 继电器上下电 → 等工具连上 → 写） |
+| `tool_connect_lead_s` | `connect_then_power` 专用：工具启动后等多久再动继电器，默认 0 |
+| `tool_connect_timeout_s` | `connect_then_power` 必填且 > 0：上电后等 `CONNECT WITH CHIP SUCCESS` 的最长窗口 |
+| `post_power_wait_s` | `power_then_connect` 专用：上电后、启动工具前的额外等待，默认 0 |
+
+`connect_then_power` 的时序证据写进 `steps/burn-<chip>.json` 的 `timing`（`tool_started_at` /
+`power_started_at` / `power_done_at` / `connected_at` / `connect_marker_seen` /
+`connect_failure_marker_seen` / `connect_timeout_s`）以及 `reset_log.jsonl` 的 `event` 行；
+`checks.connect_marker` 不过则该步 FAIL（NOAH-264/266 的 `CONNECT CHIP OVERTIME` 正是窗口错过）。
+
 ## 3. chips 块
 
 数组顺序就是执行顺序。每个 chip：
@@ -66,16 +80,19 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
   `image_addr`（`0x...`）、`success_markers`、`expected_write_bytes`（WRITE SIZE）、`expected_md5`（设备 MD5）；
   判定 = exit 0 **且** 标记齐全 **且** WRITE SIZE 相同 **且** MD5 相同，缺一项即 FAIL
   （`kb-knowledge-368ec0d51d2c`）。
-- `burn.pre_power_cycle`（`csk6-uart`，可选布尔）：为 `true` 时在工具打开烧录口**之前**按
-  `control.timing.cycle_hold_s` 做一次断电 → 上电，并全程镜像 `transport.log_port`，回执里记
-  `power.cycle`、`power.serial_log` / `bytes` / `lines` / `error`，且上下电回执不齐即 FAIL；
-  该芯片同时必须有 `control.kind=serial-relay`。默认 `false`，行为与旧版一致。
+- `burn.pre_power_cycle`（`csk6-uart`，可选布尔）：为 `true` 时在写之前做一次断电 → 上电，并全程镜像
+  `transport.log_port`，回执里记 `power.cycle`、`power.serial_log` / `bytes` / `lines` / `error`，
+  且上下电回执不齐即 FAIL；该芯片同时必须有 `control.kind=serial-relay`。默认 `false`，行为与旧版一致。
+  顺序由 `control.timing.power_sequence` 决定（见 §2）：默认 `power_then_connect` 与旧版完全一致，
+  `connect_then_power` 先启动工具持有烧录口再上下电，并用 `burn.connect_markers` /
+  `burn.connect_failure_markers` 判定是否真的连上。
   （来源：NOAH-264 首跑 `burn:csk6` 连续 11 次 `CONNECT CHIP OVERTIME`、COM35 6 s 0 字节，
-  无法区分“板子没进下载窗口”和“端口接错”。）
+  无法区分“板子没进下载窗口”和“端口接错”；NOAH-266 复跑同一现象。）
 
 ## 3.1 csk6 + hisi dev01 台架
 
-`scripts/profiles/csk6-hisi-dev01.json` 描述 win003 / win005 **共用的同一台** CSK6 + HI3863 CH344 四串口台架。
+`scripts/profiles/csk6-hisi-dev01.json` 描述 win003 / win005 **共用的同一台** CSK6 + HI3863 CH344 四串口台架
+（单台 `device` 块，历史批准 `NOAH-266` 已消耗，保留用于复现；新开工不用它）。
 
 - **端口逐节点识别，禁止跨节点复用**（`kb-knowledge-99ced0adc4e3`）：
   win003 `control COM36 / csk6:log COM35 / csk6:burn COM34 / hisi COM32`；
@@ -92,14 +109,53 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
   sha256 `b70eca75…`）目前是 `node-attachment`，`oss.download=local-only`——没有可取得位置就不编造 OSS 路径；
   解包后的写入镜像需另登记。
 
-## 3.2 draft → measured：commissioning（首跑闭环）
+### 3.1.1 多台架：每节点 4 台，逐台审批
 
+`scripts/profiles/csk6-hisi-win003.json` / `csk6-hisi-win005.json` 把同一台架族扩成**每节点 4 台**（dev01–dev04），
+端口来自 NOAH-268/269 只读清点，**一台一个批准、一台一个 ledger**：
+
+```json
+"commissioning": {
+  "approved_by": "郑保山",
+  "approval_ref": "NOAH-267",
+  "expires_at": "2026-11-26 23:59:59",
+  "benches": [
+    {"bench_id": "dev02", "node": "win003",
+     "serial": "USB\\VID_1A86&PID_55D5\\6&1655da82&0&1",
+     "topology": "UNVERIFIED",
+     "control_port": "COM41",
+     "log_ports": {"csk6": "COM38", "hisi": "COM39"},
+     "burn_ports": {"csk6": "COM40", "hisi": "COM39"},
+     "approval_ref": "NOAH-267-win003-dev02",
+     "note": "NOAH-269 清点：hub 根口 2，无 iSerial"}
+  ],
+  "pins": { "…": "同单台写法" },
+  "allowed_steps": ["burn:csk6", "verify:csk6", "burn:hisi", "verify:hisi"],
+  "max_write_steps": 2,
+  "max_runs": 1
+}
+```
+
+| 规则 | 说明 |
+|---|---|
+| `device` 与 `benches` 二选一 | 同时出现即加载失败；单台旧块保持原样可解析 |
+| `--bench <bench_id>` | 多台 profile 必填；选中哪台就驱动哪台的 `control_port` / `log_ports` / `burn_ports` |
+| 每台自己的 `approval_ref` | `--commission` 必须等于**选中那台**的 ref，不匹配即退出码 3 |
+| 每台自己的 ledger | `%TEMP%\burner-<profile>-<node>-<bench_id>-commissioning.json`；单台旧块的 ledger 名不变 |
+| 一台只写一次 | 该 bench 的 ledger 一旦有 `write_started`，换新 `approval_ref` 也拒绝（NOAH-267：每台最多 1 次） |
+| 台架身份 | `serial` 写 `usb_parent`（dev02–dev04 无真实 iSerial，COM 会变）；`usb_parent` 只在节点内唯一——win005 dev01 与 win003 dev03 是同串 |
+| `--device-snapshot` 刷新端口 | 只接受带同一 `bench_id`（或同一 `usb_parent`）的文档；无身份信息、或指向另一台，一律拒绝（退出码 3），避免 COM 漂移被悄悄用于另一台设备 |
+| `plan` | 不带 `--bench` 列出 4 台；带 `--bench` 渲染选中台的端口、时序开关与将执行的写步骤，全程零设备动作 |
+| `promote` | 只产出**被选中那台**的 measured profile（`name` 加 `-<bench_id>`、端口换成该台、`nodes` 缩成该节点、删掉 `benches`） |
+
+## 3.2 draft → measured：commissioning（首跑闭环）
 draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_write_bytes` / `expected_md5` /
 `verify.expect`（以及 `control.timing.cycle_hold_s`）只有**真跑一次**才拿得到——直接用这两条规则会形成死循环。
 闭环方式是**一次受控首跑**，证据来自这次运行本身，状态不手改：
 
 1. profile 里由真人写一个 `commissioning` 块（`status` 必须是 `draft`，measured profile 带这个块直接报错）。
-   块里的每一个字段都是审批范围的一部分：**只批一个节点、一台设备、每个 tool/image 的确定 sha256、一次首跑**：
+   块里的每一个字段都是审批范围的一部分：**只批一台 bench、每个 tool/image 的确定 sha256、一次首跑**
+   （单台用 `node` + `device`，多台用 `benches[]` 每台一条，见 §3.1.1）：
 
 ```json
 "commissioning": {
@@ -141,11 +197,13 @@ draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_
 | `expires_at` | 北京时间 `YYYY-MM-DD HH:MM:SS`；过期后加载即失败，要重新审批 |
 | `note` | 可选，只作说明 |
 
-2. 首跑：`burn.py all --commission <approval_ref> --node <approved node> --confirm-write`。三个条件缺一不可；
+2. 首跑：`burn.py all --commission <approval_ref> --node <approved node> --confirm-write`（多台 profile 再加
+   `--bench <bench_id>`）。条件缺一不可；
    `--commission` 只接受 `all`（`plan` / `preflight` 只读可用），因为它必须**从头按序**跑完整个 plan，
    `preflight` 先跑：枚举端口、核对资产 SHA、核对钉住的端口——任一不过即停，**设备零动作**。
-   写第一个写步骤之前，先在节点级 ledger（`%TEMP%\burner-<bench>-<node>-commissioning.json`）登记
-   `write_started`；同一 `approval_ref` 再次运行会被拒绝，代码里没有任何自动重试。
+   写第一个写步骤之前，先在每台 bench 的 ledger（`%TEMP%\burner-<profile>-<node>-<bench_id>-commissioning.json`，
+   单台旧块为 `%TEMP%\burner-<profile>-<node>-commissioning.json`）登记
+   `write_started`；同一台 bench 再次运行会被拒绝，代码里没有任何自动重试。
    `verify` 因为没有 `verify.expect` 而以“测量模式”判分：只要求版本键/启动行/上下电回执齐全，并把设备原文原样记下来。
 3. 跑完在 run 目录落 `commissioning.receipt.json`（schema `burner-commissioning/v1`），记录 node、执行设备、
    pins、逐芯片 WRITE SIZE、设备 MD5、四个成功标记、exit、工具/镜像 SHA、实际 argv、
@@ -161,6 +219,7 @@ draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_
    与 `measurement_required`、写 `verified`。任一分级证据缺失、回执来自另一个 profile 文件（SHA 不符）、
    approval_ref / node / device / pins 与审批不符，都会**拒绝生成**（退出码 3），且不留下半成品文件。
 5. `promote` 产出的文件必须能通过 measured 的全部校验才会落盘；把它的 diff 走正常 PR 审阅，不手改状态。
+   多台 profile 的 `promote` 按回执里的 `approval_ref` 找到那一台 bench，只产出该台的 measured profile（§3.1.1）。
 
 口径补充：`control.timing` 的 `cut_to_strap_s` / `strap_to_restore_s` / `restore_to_strap_off_s` 只在有
 `boot.required` 芯片时才是必填——没有 boot strap 的台架（如 dev01 双芯片）根本不会发 `strap_on/off`，
