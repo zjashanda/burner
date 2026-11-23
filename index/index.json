@@ -1,7 +1,7 @@
 {
   "schema": "ark.skill-index.v1",
   "skill": "burner",
-  "skill_version": "1.4.0",
+  "skill_version": "1.5.0",
   "repo": "zjashanda/burner",
   "route_schema": "ark.skill-route.v1",
   "route_order": [
@@ -256,31 +256,130 @@
       "profile": "csk6-hisi-dev01",
       "workflow": "wf.burn.csk6-hisi-dev01",
       "inputs": [
-        "profile: scripts/profiles/csk6-hisi-dev01.json（status=draft + commissioning 块）",
-        "逐节点枚举的 port-map（--device-snapshot，必填；profile 内 COM 只是 win003 参考值）",
+        "profile: scripts/profiles/csk6-hisi-dev01.json（单台旧块，NOAH-266 已消耗，仅供复现）",
+        "profile: scripts/profiles/csk6-hisi-win003.json / csk6-hisi-win005.json（每节点 4 台 benches[]，status=draft）",
+        "逐台 port-map 或 --device-snapshot（异步刷新端口时必须携带同一 bench_id / usb_parent）",
         "V40.1.11 包解包后的写入镜像 csk6-v40.1.11-fw-img + csk6-uart-burn-tool-v1.0.5",
         "V40.1.11 包解包后的 HISI 镜像 hisi-ws63-v40.1.11-all-fwpkg + BurnTool_Gold"
       ],
       "outputs": [
-        "steps/preflight.json（含 device_snapshot 的 roles）",
-        "steps/burn-csk6.json（WRITE SIZE / 设备 MD5 / 4 标记 / exit）",
+        "steps/preflight.json（含 device_snapshot 的 roles 与 bench 身份）",
+        "steps/burn-csk6.json（WRITE SIZE / 设备 MD5 / 4 标记 / exit / timing 时序）",
         "tool_logs/tool_csk6.log、tool_logs/tool_hisi.log",
         "serial_logs/verify-*_*.log",
-        "run.receipt.json（burner-receipt/v1）"
+        "reset_log.jsonl（继电器命令 + 时序事件行）",
+        "run.receipt.json（burner-receipt/v1，含 bench 与 timing）"
       ],
       "preconditions": [
-        "profile status=draft：普通 burn 一律退出码 3；首跑只能走 --commission <approval_ref> --node <approved node> --confirm-write",
-        "commissioning 块必须钉住 approved_by / approval_ref / node / device（serial + 端口）/ 每个 tool+image 的 sha256 / max_runs=1",
-        "同一 approval_ref 只写一次（节点级 ledger），失败不自动重试、不重跑；预门禁任一失败则设备零动作",
-        "跨节点禁止复用 COM 映射（kb-knowledge-99ced0adc4e3）；必须传 --device-snapshot",
-        "CSK6 PASS 判据：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0（kb-knowledge-368ec0d51d2c）",
-        "HISI PASS 判据：optLog 成功 token、无失败 token、4 条上下电回执全 PASS；分区集与本包不一致记 NEEDS_REVIEW",
-        "measured 只能由 commissioning.receipt.json + promote 产出，不手改状态"
+        "profile status=draft：普通 burn 一律退出码 3；首跑只能走 all --commission <approval_ref> --node <approved node> --confirm-write，多台 profile 还要 --bench <bench_id>",
+        "一台 bench 一个 approval_ref（NOAH-267-<node>-<bench>）；--commission 必须等于选中那台的 ref",
+        "一台 bench 一个 ledger（%TEMP%\\burner-<profile>-<node>-<bench_id>-commissioning.json）；该台一旦 write_started，换新 ref 也拒绝，失败切下一台不重试",
+        "commissioning 块必须钉住 approved_by / pins（每个 tool+image 的 sha256）/ allowed_steps / max_write_steps / max_runs=1，以及单台 device 或 benches[]",
+        "台架主键是 usb_parent（dev02–dev04 无真实 iSerial，COM 会随重插变化）；跨节点禁止复用 COM",
+        "control.timing.power_sequence=connect_then_power：工具先开烧录口等待 → 继电器上下电 → 等 CONNECT WITH CHIP SUCCESS；默认 power_then_connect 保持旧行为",
+        "CSK6 PASS 判据：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0、connect_marker（声明 connect_then_power 时）；HISI PASS 判据：optLog 成功 token、无失败 token、4 条上下电回执全 PASS",
+        "measured 只能由 commissioning.receipt.json + promote 产出；多台 profile 的 promote 只产出被选中那台的 measured profile",
+        "approval 有效期（expires_at）过期后 profile 仍可解析、plan/preflight 仍可用并打印 EXPIRED，但任何写步骤退出码 3；过期必须重新审批，不能重跑绕过"
+      ],
+      "evidence_schema": "burner-receipt/v1",
+      "version": "1.1.0",
+      "status": "draft",
+      "blocked_reason": "profile 仍 draft：4 台台架与逐台 approval_ref 已按 NOAH-268/269 实测清点登记，写后字段（WRITE SIZE / 设备 MD5 / 启动横幅 / HISI signal_baud / 连接时序实测值）待 win003、win005 逐台 commissioning 回填后再 promote",
+      "profiles": [
+        "csk6-hisi-dev01",
+        "csk6-hisi-win003",
+        "csk6-hisi-win005"
+      ],
+      "bench_sets": [
+        {
+          "node": "win003",
+          "profile": "csk6-hisi-win003",
+          "benches": [
+            {
+              "bench_id": "dev01",
+              "approval_ref": "NOAH-267-win003-dev01"
+            },
+            {
+              "bench_id": "dev02",
+              "approval_ref": "NOAH-267-win003-dev02"
+            },
+            {
+              "bench_id": "dev03",
+              "approval_ref": "NOAH-267-win003-dev03"
+            },
+            {
+              "bench_id": "dev04",
+              "approval_ref": "NOAH-267-win003-dev04"
+            }
+          ],
+          "source": "NOAH-269 只读清点（4 台 / 16 口，hub 根口 3/2/4/5）"
+        },
+        {
+          "node": "win005",
+          "profile": "csk6-hisi-win005",
+          "benches": [
+            {
+              "bench_id": "dev01",
+              "approval_ref": "NOAH-267-win005-dev01"
+            },
+            {
+              "bench_id": "dev02",
+              "approval_ref": "NOAH-267-win005-dev02"
+            },
+            {
+              "bench_id": "dev03",
+              "approval_ref": "NOAH-267-win005-dev03"
+            },
+            {
+              "bench_id": "dev04",
+              "approval_ref": "NOAH-267-win005-dev04"
+            }
+          ],
+          "source": "NOAH-268 只读清点（4 台 / 16 口，父 Hub HS04/HS02/HS03/HS05）"
+        }
+      ]
+    },
+    {
+      "capability_id": "burn.csk6-hisi-multi-bench",
+      "skill": "burner",
+      "module": "burn",
+      "chip": [
+        "csk6",
+        "hisi"
+      ],
+      "project": [
+        "csk6-hisi-dev01"
+      ],
+      "firmware_family": [
+        "csk6-v40.1.11",
+        "hisi-ws63"
+      ],
+      "profile": "csk6-hisi-win003",
+      "profiles": [
+        "csk6-hisi-win003",
+        "csk6-hisi-win005"
+      ],
+      "workflow": "wf.burn.csk6-hisi-multi-bench",
+      "inputs": [
+        "--bench <bench_id>（dev01–dev04，必填）",
+        "--commission NOAH-267-<node>-<bench>（必须等于该台的 approval_ref）",
+        "--node <win003|win005>（必须等于该台 benches[].node）",
+        "material-dir（csk6-uart-burn-tool-v1.0.5 + csk6-v40.1.11-fw-img + hisi 包）"
+      ],
+      "outputs": [
+        "steps/burn-csk6.json（含 timing：tool_started / power_done / connected / connect_marker_seen）",
+        "commissioning.receipt.json（含 bench.bench_id + approval_ref）",
+        "%TEMP%\\burner-<profile>-<node>-<bench_id>-commissioning.json（该台的 ledger，一次即封）"
+      ],
+      "preconditions": [
+        "每台只有 1 次机会：ledger 里 write_started 之后，同台任何 ref 都拒绝",
+        "换台/重插后先重跑只读枚举；端口变化必须由带同一 bench_id/usb_parent 的快照刷新，否则拒绝",
+        "profile 仍 draft；measured 由该台的 commissioning.receipt.json + promote 产出",
+        "approval 有效期（expires_at）过期后 profile 仍可解析、plan/preflight 仍可用并打印 EXPIRED，但任何写步骤退出码 3；过期必须重新审批，不能重跑绕过"
       ],
       "evidence_schema": "burner-receipt/v1",
       "version": "1.0.0",
-      "status": "draft",
-      "blocked_reason": "首跑 commissioning 待 win003 执行；本 profile 已补齐只读可测字段，写后字段（WRITE SIZE / 设备 MD5 / 启动横幅 / HISI signal_baud）仍为空"
+      "status": "draft"
     }
   ],
   "chips": [
@@ -364,8 +463,8 @@
     },
     {
       "project_id": "csk6-hisi-dev01",
-      "board": "CSK6 + HI3863(WS63) CH344 四串口台架 dev01",
-      "node": "win003 | win005（共用同一台 dev01，端口逐节点枚举）",
+      "board": "CSK6 + HI3863(WS63) CH344 四串口台架（dev01 单台旧块 + 每节点 dev01–dev04 四台）",
+      "node": "win003 / win005（端口逐节点、逐台枚举，禁止跨节点复用）",
       "board_family": "generic",
       "profile": "scripts/profiles/csk6-hisi-dev01.json",
       "profile_status": "draft",
@@ -375,11 +474,56 @@
         "burn.csk6-hisi-dev01",
         "burn.port-asset-preflight"
       ],
-      "blocked_reason": "profile draft：普通写阶段拒绝；只读字段已测实，写后字段由 NOAH-263 受控首跑（commissioning + promote）回填，再升 measured",
+      "blocked_reason": "profile draft：4 台台架与逐台 approval_ref 已登记（NOAH-268/269 清点），写后字段由逐台 commissioning + promote 回填，不手改状态",
       "knowledge": [
         "kb-knowledge-99ced0adc4e3",
         "kb-knowledge-368ec0d51d2c",
         "kb-knowledge-158d1416a657",
+        "kb-method-cad7be93134e"
+      ],
+      "profiles": [
+        "scripts/profiles/csk6-hisi-dev01.json",
+        "scripts/profiles/csk6-hisi-win003.json",
+        "scripts/profiles/csk6-hisi-win005.json"
+      ]
+    },
+    {
+      "project_id": "csk6-hisi-win003",
+      "board": "CSK6 + HI3863(WS63) CH344 四串口台架 ×4（win003 dev01–dev04）",
+      "node": "win003",
+      "board_family": "generic",
+      "profile": "scripts/profiles/csk6-hisi-win003.json",
+      "profile_status": "draft",
+      "verified_on": null,
+      "verified_by": null,
+      "capabilities": [
+        "burn.csk6-hisi-multi-bench",
+        "burn.csk6-hisi-dev01"
+      ],
+      "blocked_reason": "win003 4 台台架已按只读清点登记逐台 approval_ref；首跑写后字段未测，measured 只能由 commissioning.receipt.json + promote 产出",
+      "knowledge": [
+        "kb-knowledge-99ced0adc4e3",
+        "kb-knowledge-368ec0d51d2c",
+        "kb-method-cad7be93134e"
+      ]
+    },
+    {
+      "project_id": "csk6-hisi-win005",
+      "board": "CSK6 + HI3863(WS63) CH344 四串口台架 ×4（win005 dev01–dev04）",
+      "node": "win005",
+      "board_family": "generic",
+      "profile": "scripts/profiles/csk6-hisi-win005.json",
+      "profile_status": "draft",
+      "verified_on": null,
+      "verified_by": null,
+      "capabilities": [
+        "burn.csk6-hisi-multi-bench",
+        "burn.csk6-hisi-dev01"
+      ],
+      "blocked_reason": "win005 4 台台架已按只读清点登记逐台 approval_ref；首跑写后字段未测，measured 只能由 commissioning.receipt.json + promote 产出",
+      "knowledge": [
+        "kb-knowledge-99ced0adc4e3",
+        "kb-knowledge-368ec0d51d2c",
         "kb-method-cad7be93134e"
       ]
     }
@@ -541,8 +685,8 @@
         "verify:hisi",
         "receipt"
       ],
-      "entry": "python scripts/burn.py plan|preflight --profile scripts/profiles/csk6-hisi-dev01.json --run-dir <dir> --device-snapshot <port-map.json>；首跑：all --commission NOAH-263 --node win003 --confirm-write；随后 promote 由回执生成 measured profile",
-      "note": "严格串行；任一步 FAIL/BLOCKED 即停并写出 FAIL 回执。CSK6 驱动 csk6-uart 已实现并单测；首跑由 win003 节点侧 Issue 执行一次，不重试",
+      "entry": "python scripts/burn.py plan --profile scripts/profiles/csk6-hisi-win003.json --run-dir <dir> --bench dev02；首跑：all --profile ... --bench dev02 --commission NOAH-267-win003-dev02 --node win003 --confirm-write；每台一次，失败切下一台；随后 promote 由回执生成该台的 measured profile",
+      "note": "严格串行；任一步 FAIL/BLOCKED 即停并写出 FAIL 回执。driver csk6-uart 已实现并单测；多台架按 --bench 逐台执行，每台独立 approval_ref/ledger，失败不重试。代码通过不等于真机通过",
       "judgement_items": [
         {
           "n": 1,
@@ -552,8 +696,8 @@
         },
         {
           "n": 2,
-          "item": "CSK6 烧录：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0",
-          "maps_to": "burn:csk6",
+          "item": "CSK6 烧录：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0；声明 connect_then_power 时还要求 timing.connect_marker_seen",
+          "maps_to": "burn:csk6（pre_power_cycle + control.timing.power_sequence）",
           "kb": "kb-knowledge-368ec0d51d2c"
         },
         {
@@ -585,6 +729,46 @@
           "item": "版本验收：设备原文 vs 包名原文（只消掉前导 V，中文档如实记差异）",
           "maps_to": "verify:csk6（version_key=csk6_app） / verify:hisi（hisi_sys_ver）",
           "kb": "kb-knowledge-5b92a7b0c5d9"
+        }
+      ],
+      "verdict_rule": "整机结论取最差项；任一 FAIL/NEEDS_REVIEW 不得被其他 PASS 抵消（kb-method-cad7be93134e）"
+    },
+    {
+      "workflow_id": "wf.burn.csk6-hisi-multi-bench",
+      "steps": [
+        "preflight",
+        "burn:csk6",
+        "verify:csk6",
+        "burn:hisi",
+        "verify:hisi",
+        "receipt"
+      ],
+      "entry": "plan --bench <id> → all --bench <id> --commission <台架 ref> --node <node> --confirm-write → promote（单台）",
+      "note": "一台一遍；失败留证后切下一台，不在同一台上重试",
+      "judgement_items": [
+        {
+          "n": 1,
+          "item": "台架身份与端口：bench_id + usb_parent 对得上，端口来自批准或同一身份的快照",
+          "maps_to": "preflight（--bench / --device-snapshot）",
+          "kb": "kb-knowledge-99ced0adc4e3"
+        },
+        {
+          "n": 2,
+          "item": "连接时序：工具先开烧录口，上下电后 CONNECT WITH CHIP SUCCESS 出现在窗口内",
+          "maps_to": "burn:csk6 timing / checks.connect_marker",
+          "kb": "kb-knowledge-368ec0d51d2c"
+        },
+        {
+          "n": 3,
+          "item": "CSK6 写结果：WRITE SIZE + 设备 MD5 + 4 标记 + exit 0",
+          "maps_to": "burn:csk6",
+          "kb": "kb-knowledge-368ec0d51d2c"
+        },
+        {
+          "n": 4,
+          "item": "HISI 与启动/版本验收：optLog token、上下电回执、启动横幅原文",
+          "maps_to": "burn:hisi / verify:*",
+          "kb": "kb-knowledge-5f25b39ebe82"
         }
       ],
       "verdict_rule": "整机结论取最差项；任一 FAIL/NEEDS_REVIEW 不得被其他 PASS 抵消（kb-method-cad7be93134e）"
@@ -630,6 +814,14 @@
       "firmware": "未注册（本包 HISI bin 待登记）",
       "status": "draft",
       "evidence": "分区集与 signal_baud 未实测；写阶段禁止"
+    },
+    {
+      "profile": "csk6-hisi-win003 | csk6-hisi-win005",
+      "chip": "csk6 / hisi",
+      "tool": "Uart_Burn_Tool v1.0.5（sha256 4bfdf680…）+ hisi-burntool-gold",
+      "firmware": "csk6-v40.1.11-fw-img + hisi-ws63-v40.1.11-all-fwpkg",
+      "status": "draft",
+      "evidence": "每节点 4 台逐台 approval_ref（NOAH-267-win003/5-dev01..04）；写后字段待逐台 commissioning"
     }
   ],
   "task_dir_contract": {
@@ -643,6 +835,6 @@
     "task_dir_owner": "lstest",
     "note": "burner 只写烧录产物，不负责建整套任务目录"
   },
-  "updated_at": "2026-11-19 17:05:00",
-  "updated_by": "NOAH-263"
+  "updated_at": "2026-11-23 10:25:54",
+  "updated_by": "NOAH-270"
 }

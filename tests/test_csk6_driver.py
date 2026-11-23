@@ -448,8 +448,8 @@ class Csk6IndexTests(unittest.TestCase):
         self.assertNotIn("oss://", json.dumps(asset))
 
     def test_index_and_manifest_share_the_skill_version(self):
-        self.assertEqual(load(INDEX)["skill_version"], "1.4.0")
-        self.assertEqual(load(MANIFEST)["version"], "1.4.0")
+        self.assertEqual(load(INDEX)["skill_version"], "1.5.0")
+        self.assertEqual(load(MANIFEST)["version"], "1.5.0")
 
 
 if __name__ == "__main__":

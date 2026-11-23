@@ -12,7 +12,7 @@
     "OTA/升级后的稳定性与上下电观察（交给 lstest）",
     "知识、方法、缺陷沉淀（交给 ark-kb）"
   ],
-  "version": "1.4.0",
+  "version": "1.5.0",
   "index": {
     "machine": "index/index.json",
     "human": "index/README.md",
@@ -26,6 +26,6 @@
     "asset_manifest": "assets/manifest.json"
   },
   "routing_contract": "agents read index/index.json first, then route capability -> skill -> chip -> project -> profile -> workflow; never guess a profile or tool",
-  "updated_at": "2026-11-19 17:05:00",
-  "updated_by": "NOAH-263"
+  "updated_at": "2026-11-23 10:25:54",
+  "updated_by": "NOAH-270"
 }

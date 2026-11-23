@@ -28,9 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from core.assets import AssetError, Assets, FetchBlocked  # noqa: E402
 from core.bench import Audit, BenchError, BenchLock  # noqa: E402
-from core.commission import (CommissionError, assert_not_used, check_manifest_pins,  # noqa: E402
-                             check_run_pins, consume, guard_write, promote_profile,
-                             write_measurement)  # noqa: E402
+from core.commission import (CommissionError, apply_bench, assert_not_used,  # noqa: E402
+                             check_manifest_pins, check_run_pins, consume, expiry_state, guard_write,
+                             promote_profile, select_bench, write_measurement)  # noqa: E402
 from core.contract import SCHEMAS, now_bj  # noqa: E402
 from core.device_snapshot import (DeviceSnapshotError, apply_snapshot,  # noqa: E402
                                   resolve_snapshot)
@@ -59,7 +59,8 @@ def snapshot_lines(snapshot: dict) -> list[str]:
 
 
 def plan_text(profile: Profile, assets: Assets, material_dir: Path | None, cache_dir: Path | None,
-              snapshot: dict | None = None) -> str:
+              snapshot: dict | None = None, bench: dict | None = None,
+              benches: list[dict] | None = None) -> str:
     info = profile.describe()
     lines = [
         f"node: {info['node']}",
@@ -67,6 +68,32 @@ def plan_text(profile: Profile, assets: Assets, material_dir: Path | None, cache
         f"board: {info['board']}",
         f"time contract: {info['time_contract']['format']} ({info['time_contract']['zone']}, no offset)",
         f"control: {info['control']['kind']} {info['control']['port']}@{info['control']['baud']}",
+    ]
+    timing = info["control"].get("timing") or {}
+    if timing.get("power_sequence"):
+        lines.append(f"power sequence: {timing['power_sequence']}"
+                     + (f" (lead {timing.get('tool_connect_lead_s')} s, "
+                        f"connect timeout {timing.get('tool_connect_timeout_s')} s)"
+                        if timing.get("power_sequence") == "connect_then_power" else ""))
+    if bench:
+        lines.append(
+            f"bench: {bench['bench_id']} (node {bench['node']}, usb {bench['serial']}, "
+            f"approval {bench['approval_ref']}, control {bench['control_port']}, "
+            f"burn {bench.get('burn_ports') or {}}, log {bench.get('log_ports') or {}})")
+    elif benches:
+        lines.append(f"benches: {len(benches)} (pick one with --bench <bench_id>)")
+        for entry in benches:
+            lines.append(f"  - {entry['bench_id']}: node {entry['node']} usb {entry['serial']} "
+                         f"control {entry['control_port']} burn {entry.get('burn_ports') or {}} "
+                         f"approval {entry['approval_ref']}")
+    block = getattr(profile, "commissioning", None)
+    if block:
+        window = expiry_state(block)
+        if window.get("expires_at"):
+            lines.append(
+                f"approval window: {window['expires_at']}"
+                + ("  [EXPIRED - writes refused until a new approval]" if window["expired"] else "  (valid)"))
+    lines += [
         f"material dir: {material_dir or '-'}",
         f"asset cache: {cache_dir or '-'}",
         "",
@@ -136,10 +163,11 @@ def _write_receipt_file(ctx: dict, state: RunState, receipt: dict) -> Path:
 
 
 def _guard_write(profile: Profile, steps: list[str], plan: list[str], commission: str | None,
-                 confirm_write: bool) -> list[str]:
+                 confirm_write: bool, bench_id: str | None = None,
+                 snapshot: dict | None = None) -> list[str]:
     """Delegate to the commission guard: measured profiles work as before, a
     draft only writes through an approved, bounded commissioning block."""
-    return guard_write(profile, steps, plan, commission, confirm_write)
+    return guard_write(profile, steps, plan, commission, confirm_write, bench_id, snapshot)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -175,6 +203,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="first bring-up on a draft profile: the approval reference from the profile's "
                              "commissioning block (plus --confirm-write and --node); writes "
                              "commissioning.receipt.json")
+    parser.add_argument("--bench", default=None, metavar="BENCH_ID",
+                        help="which bench of a multi-bench commissioning block this run may drive; "
+                             "one bench = one approval_ref = one ledger")
     parser.add_argument("--node", default=None, metavar="HOST",
                         help="executing host; required with --commission and must equal the approved node")
     args = parser.parse_args(argv)
@@ -207,6 +238,24 @@ def main(argv: list[str] | None = None) -> int:
         snapshot: dict | None = None
         if args.device_snapshot:
             snapshot = resolve_snapshot(Path(args.device_snapshot).expanduser().resolve(), profile)
+        block = getattr(profile, "commissioning", None)
+        benches = (block or {}).get("benches") or []
+        bench: dict | None = None
+        if block:
+            if benches and not str(args.bench or "").strip() and (args.command == "plan" or args.dry_run):
+                # Read-only preview: list every bench instead of silently racing one.
+                assets = Assets(Path(args.assets).expanduser().resolve())
+                print(plan_text(profile, assets, material_dir, cache_dir, snapshot, benches=benches))
+                print("\n[dry-run] pick one bench with --bench <bench_id>; no serial port opened, "
+                      "no burn tool started")
+                return EXIT_OK
+            bench = select_bench(block, args.bench)
+            apply_bench(profile, bench)
+        elif args.bench:
+            raise ProfileError(
+                f"--bench {args.bench!r} only applies to a profile with a commissioning block; "
+                f"{profile.name} has none")
+        if snapshot:
             apply_snapshot(profile, snapshot)
         assets = Assets(Path(args.assets).expanduser().resolve())
         assets.require(profile.asset_ids())
@@ -217,19 +266,23 @@ def main(argv: list[str] | None = None) -> int:
                 raise CommissionError(
                     "--commission runs the whole approved plan in order (preflight first); "
                     "only 'all' may write, 'plan' and 'preflight' are read-only")
-            if profile.commissioning:
+            if block:
+                if benches and not bench:
+                    raise CommissionError(
+                        "this profile commissions several benches; --bench <bench_id> names the one "
+                        "this approval covers")
+                approved_node = str((bench or {}).get("node") or block.get("node") or "").strip()
                 if not str(args.node or "").strip():
                     raise CommissionError(
                         "--commission needs --node <the approved host>; an approval covers exactly one node")
-                if args.node.strip() != str(profile.commissioning["node"]).strip():
+                if args.node.strip() != approved_node:
                     raise CommissionError(
-                        f"--node {args.node!r} is not the node this approval covers "
-                        f"({profile.commissioning['node']!r})")
-                check_manifest_pins(profile, profile.commissioning, assets)
-                assert_not_used(profile, profile.commissioning)
+                        f"--node {args.node!r} is not the node this approval covers ({approved_node!r})")
+                check_manifest_pins(profile, block, assets)
+                assert_not_used(profile, block, bench)
 
         if args.command == "plan" or args.dry_run:
-            print(plan_text(profile, assets, material_dir, cache_dir, snapshot))
+            print(plan_text(profile, assets, material_dir, cache_dir, snapshot, bench=bench))
             print("\n[dry-run] no serial port opened, no burn tool started")
             return EXIT_OK
 
@@ -263,7 +316,8 @@ def main(argv: list[str] | None = None) -> int:
             "node": args.node or profile.node,
             "audit": Audit(run_dir, args.issue or profile.node),
             "device_snapshot": snapshot,
-            "commissioning": profile.commissioning if args.commission else None,
+            "bench": bench,
+            "commissioning": block if args.commission else None,
         }
         state = RunState(run_dir)
 
@@ -278,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             steps = list(plan)
 
-        _guard_write(profile, steps, plan, args.commission, args.confirm_write)
+        _guard_write(profile, steps, plan, args.commission, args.confirm_write, args.bench, snapshot)
         state.require(steps[0], plan)
 
         if ctx.get("commissioning") and args.command == "all":
@@ -298,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
             for step in steps:
                 state.require(step, plan)
                 if ctx.get("commissioning") and step in write_steps(plan) and not ledger_consumed:
-                    path = consume(profile, ctx["commissioning"], run_dir)
+                    path = consume(profile, ctx["commissioning"], run_dir, bench=ctx.get("bench"))
                     ledger_consumed = True
                     print(json.dumps({"step": "commissioning-ledger", "consumed": str(path)}, ensure_ascii=False))
                 receipt = _execute_step(ctx, state, step)
@@ -319,7 +373,14 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"step": step, "verdict": verdict, "receipt": str(path)}, ensure_ascii=False))
                 if worst != EXIT_OK:
                     if args.command == "all":
-                        recovery = safe_recover(ctx, f"{step} -> {verdict}")
+                        if step == "preflight":
+                            # A pre-gate failure touched no device: restoring power
+                            # would itself be a relay command (NOAH-266: two
+                            # uut-switch1.off were sent by a unit test on a live bench).
+                            recovery = {"reason": f"{step} -> {verdict}", "skipped": True,
+                                        "note": "preflight gates before any device action; nothing to restore"}
+                        else:
+                            recovery = safe_recover(ctx, f"{step} -> {verdict}")
                         print(json.dumps({"step": "safe-recover", "result": recovery}, ensure_ascii=False))
                         failed_receipt = phase_receipt(ctx, state)
                         receipt_path = _write_receipt_file(ctx, state, failed_receipt)
@@ -327,10 +388,10 @@ def main(argv: list[str] | None = None) -> int:
                                           "receipt": str(receipt_path)}, ensure_ascii=False))
                     break
         if ledger_consumed:
-            consume(profile, ctx["commissioning"], run_dir, stage="finished",
+            consume(profile, ctx["commissioning"], run_dir, stage="finished", bench=ctx.get("bench"),
                     extra={"first_run_verdict": "PASS" if worst == EXIT_OK else "FAIL"})
         if ctx.get("commissioning") and args.command == "all" and worst == EXIT_OK:
-            path = write_measurement(run_dir, profile, ctx["commissioning"])
+            path = write_measurement(run_dir, profile, ctx["commissioning"], ctx.get("bench"))
             print(json.dumps({"step": "commissioning-receipt", "receipt": str(path),
                               "note": "promote this profile from the receipt once the bench evidence is archived"},
                              ensure_ascii=False))
