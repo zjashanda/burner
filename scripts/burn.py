@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core.assets import AssetError, Assets, FetchBlocked  # noqa: E402
 from core.bench import Audit, BenchError, BenchLock  # noqa: E402
 from core.commission import (CommissionError, apply_bench, assert_not_used,  # noqa: E402
-                             check_manifest_pins, check_run_pins, consume, guard_write,
+                             check_manifest_pins, check_run_pins, consume, expiry_state, guard_write,
                              promote_profile, select_bench, write_measurement)  # noqa: E402
 from core.contract import SCHEMAS, now_bj  # noqa: E402
 from core.device_snapshot import (DeviceSnapshotError, apply_snapshot,  # noqa: E402
@@ -86,6 +86,13 @@ def plan_text(profile: Profile, assets: Assets, material_dir: Path | None, cache
             lines.append(f"  - {entry['bench_id']}: node {entry['node']} usb {entry['serial']} "
                          f"control {entry['control_port']} burn {entry.get('burn_ports') or {}} "
                          f"approval {entry['approval_ref']}")
+    block = getattr(profile, "commissioning", None)
+    if block:
+        window = expiry_state(block)
+        if window.get("expires_at"):
+            lines.append(
+                f"approval window: {window['expires_at']}"
+                + ("  [EXPIRED - writes refused until a new approval]" if window["expired"] else "  (valid)"))
     lines += [
         f"material dir: {material_dir or '-'}",
         f"asset cache: {cache_dir or '-'}",

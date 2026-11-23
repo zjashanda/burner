@@ -41,6 +41,9 @@ def draft_raw(tmp: Path, **block_overrides) -> dict:
     raw = json.loads(DEV01.read_text(encoding="utf-8"))
     raw["lock_path"] = str(tmp / "bench.lock")
     block = dict(raw["commissioning"])
+    # The shipped legacy approval lapsed on 2026-11-21; fixtures carry their own
+    # window so the suite never depends on the wall clock.
+    block["expires_at"] = "2099-12-31 23:59:59"
     block.update(block_overrides)
     raw["commissioning"] = block
     return raw
@@ -231,12 +234,15 @@ class CommissioningGuardTests(unittest.TestCase):
                              "--confirm-write", "--commission", APPROVAL, "--node", NODE])
         self.assertEqual(code, 3)
 
-    def test_expired_block_is_refused_on_load(self):
+    def test_expired_approval_still_loads_but_refuses_the_write(self):
         with tempfile.TemporaryDirectory() as tmp:
             raw = draft_raw(Path(tmp), expires_at="2020-01-01 00:00:00")
             path = write_profile(Path(tmp), raw)
-            with self.assertRaises(ProfileError):
-                Profile(path)
+            profile = Profile(path)  # readable: expiry is a write gate, not a load gate
+            self.assertTrue(commission_module.expiry_state(profile.commissioning)["expired"])
+            code = cli.main(["all", "--profile", str(path), "--run-dir", tmp,
+                             "--confirm-write", "--commission", APPROVAL, "--node", NODE])
+        self.assertEqual(code, 3)
 
     def test_block_on_a_measured_profile_is_refused(self):
         with tempfile.TemporaryDirectory() as tmp:

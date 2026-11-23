@@ -124,16 +124,38 @@ def validate_block(raw: dict, status: str) -> dict | None:
     if not isinstance(runs, int) or isinstance(runs, bool) or runs != 1:
         raise ProfileError("profile.commissioning.max_runs must be 1: a first run is never repeated")
     expires = block.get("expires_at")
-    if expires is not None:
-        if not (isinstance(expires, str) and TIMESTAMP.match(expires)):
-            raise ProfileError("profile.commissioning.expires_at must be 'YYYY-MM-DD HH:MM:SS' (北京时间)")
-        if now_bj() > expires:
-            raise ProfileError(
-                f"profile.commissioning.expires_at {expires} has passed; a new approval is required")
+    if expires is not None and not (isinstance(expires, str) and TIMESTAMP.match(expires)):
+        raise ProfileError("profile.commissioning.expires_at must be 'YYYY-MM-DD HH:MM:SS' (北京时间)")
     approved = block.get("approved_at")
     if approved is not None and not (isinstance(approved, str) and TIMESTAMP.match(approved)):
         raise ProfileError("profile.commissioning.approved_at must be 'YYYY-MM-DD HH:MM:SS' (北京时间)")
     return block
+
+
+def expiry_state(block: dict) -> dict:
+    """Whether this approval is still inside its validity window.
+
+    Expiry is a *write* gate, not a load gate: an expired block must still be
+    readable so ``plan`` / ``preflight`` can explain what lapsed and so lint and
+    the unit suite keep working after the date passes (a repo that cannot be
+    read once an approval expires is a trap, not a guard).
+    """
+    expires = block.get("expires_at")
+    if not isinstance(expires, str) or not TIMESTAMP.match(expires):
+        return {"expires_at": None, "expired": False, "checked_at": now_bj()}
+    return {"expires_at": expires, "expired": now_bj() > expires, "checked_at": now_bj()}
+
+
+def check_expiry(block: dict, bench: dict | None = None) -> None:
+    """Refuse to write on an approval whose window has passed."""
+    state = expiry_state(block)
+    if not state["expired"]:
+        return
+    where = f" for bench {bench['bench_id']!r}" if bench and bench.get("bench_id") else ""
+    raise CommissionError(
+        f"profile.commissioning.expires_at {state['expires_at']} has passed{where}; "
+        f"now is {now_bj()}. The approval lapsed - a new approval (new expires_at, and for a spent "
+        "bench a human decision) is required before any write")
 
 
 def _validate_device(device: Any) -> None:
@@ -353,6 +375,7 @@ def guard_write(profile: Profile, steps: list[str], plan: list[str], approval_re
             f"commissioning allows at most {block['max_write_steps']} write step(s), this run would run {writes}")
     if not confirm_write:
         raise CommissionError(f"steps {writes} change power/flash state; re-run with --confirm-write")
+    check_expiry(block, bench)
     check_bench(profile, block, bench, snapshot)
     return writes
 
@@ -966,6 +989,6 @@ def promote_profile(profile_path: Path, measurement_path: Path, out_path: Path) 
 
 
 __all__ = ["COMMISSION_SCHEMA", "CommissionError", "validate_block", "select_bench", "apply_bench",
-           "guard_write", "check_bench", "bench_device",
+           "guard_write", "check_bench", "bench_device", "expiry_state", "check_expiry",
            "check_manifest_pins", "check_run_pins", "ledger_path", "ledger_state", "assert_not_used",
            "consume", "measurement_from_run", "write_measurement", "promote_profile", "TIMING_KEYS"]

@@ -194,7 +194,7 @@ draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_
 | `allowed_steps` | 本次允许的步骤（`preflight`/`receipt` 恒允许），白名单之外一步都不许跑 |
 | `max_write_steps` | 写步骤上限，只允许 1 或 2 |
 | `max_runs` | 固定为 1：首跑不是重试许可 |
-| `expires_at` | 北京时间 `YYYY-MM-DD HH:MM:SS`；过期后加载即失败，要重新审批 |
+| `expires_at` | 北京时间 `YYYY-MM-DD HH:MM:SS`；**过期是写门禁不是加载门禁**：profile 仍可解析、`plan`/`preflight` 仍可用（plan 打印 `[EXPIRED - writes refused until a new approval]`），写步骤退出码 3；过期要重新审批，不能靠重跑绕过 |
 | `note` | 可选，只作说明 |
 
 2. 首跑：`burn.py all --commission <approval_ref> --node <approved node> --confirm-write`（多台 profile 再加
@@ -212,8 +212,7 @@ draft profile 的写阶段一律拒绝，而 measured 必须给出的 `expected_
    `complete=false` + `missing` 会写明缺哪项。
    CSK6/VenusA 按 flash 数字判定（exit 0 + 4 标记 + WRITE SIZE + 设备 MD5）；
    HISI 按 optLog 成功 token + 无失败 token + 4 条上下电回执判定（BurnTool 的 exit code 只记录不判分）。
-4. `burn.py promote --profile <draft> --from <commissioning.receipt.json> --out <measured.json>`：
-   只把回执里的值搬进 profile（`expected_write_bytes`、`expected_md5`、`verify.expect`、`window_s`、
+4. `burn.py promote --profile <draft> --from <commissioning.receipt.json> --out <measured.json>`：   只把回执里的值搬进 profile（`expected_write_bytes`、`expected_md5`、`verify.expect`、`window_s`、
    `control.timing.cycle_hold_s`、缺失的 `transport.burn_baud`/`burn_port`、`burn.image_addr`，以及 HISI 实际
    argv 里的 `-signalbaud` / `-chiptype` / `-onlyburn`），然后 `status` 改 `measured`、删掉 `commissioning`
    与 `measurement_required`、写 `verified`。任一分级证据缺失、回执来自另一个 profile 文件（SHA 不符）、

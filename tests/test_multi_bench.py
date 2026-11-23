@@ -54,6 +54,9 @@ def draft_raw(tmp: Path, profile: Path = WIN003, **overrides) -> dict:
     raw = load(profile)
     raw["lock_path"] = str(tmp / "bench.lock")
     block = dict(raw["commissioning"])
+    # Fixtures carry their own window: the shipped approvals must never make the
+    # suite pass or fail because of today's date.
+    block["expires_at"] = "2099-12-31 23:59:59"
     block.update(overrides)
     raw["commissioning"] = block
     return raw
