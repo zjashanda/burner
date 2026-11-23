@@ -47,7 +47,7 @@ SINGLE_KEYS = ("node", "device")
 BENCH_LIST_KEY = "benches"
 OPTIONAL_KEYS = ("expires_at", "approved_at", "note")
 BENCH_ENTRY_KEYS = {"bench_id", "node", "serial", "topology", "control_port",
-                    "burn_ports", "log_ports", "approval_ref", "note"}
+                    "burn_ports", "log_ports", "spare_port", "approval_ref", "note"}
 BENCH_ID = re.compile(r"^[a-z][a-z0-9_-]{1,23}$")
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$")
 TIMING_KEYS = ("cut_to_strap_s", "strap_to_restore_s", "restore_to_strap_off_s", "cycle_hold_s")
@@ -230,6 +230,9 @@ def _validate_benches(block: dict, declared_nodes: list[str]) -> None:
             if not _port_digits(port):
                 raise ProfileError(f"{where}.burn_ports.{chip_id} must be COMx")
         _validate_log_ports(entry, f"commissioning.benches[{index}]")
+        spare = entry.get("spare_port")
+        if spare is not None and not _port_digits(spare):
+            raise ProfileError(f"{where}.spare_port must be COMx when it is declared")
         ref = str(entry.get("approval_ref") or "").strip()
         if not ref:
             raise ProfileError(f"{where}.approval_ref must name this bench's own approval reference")
@@ -449,6 +452,7 @@ def check_bench(profile: Profile, block: dict, bench: dict | None = None,
                     f"commissioning pins {chip.id} {kind} {want!r}, the profile would use {have!r}")
     return {"bench_id": str(bench["bench_id"]), "node": node,
             "approval_ref": str(bench["approval_ref"]), "ports": ports,
+            "roles": bench_roles(bench),
             "pinned_control_port": str(bench.get("control_port")),
             "ports_refreshed_from_snapshot": refreshed is not None, **(refreshed or {})}
 
@@ -578,6 +582,7 @@ def consume(profile: Profile, block: dict, run_dir: Path, stage: str = "write_st
     state["approval_ref"] = str(bench["approval_ref"])
     state["approved_by"] = str(block["approved_by"])
     state["device"] = bench_device(bench)
+    state["roles"] = bench_roles(bench)
     state[stage] = now_bj()
     state["run_dir"] = str(run_dir)
     for key, value in (extra or {}).items():
@@ -654,6 +659,34 @@ def _control_hold(run_dir: Path) -> dict[str, Any]:
         elif command.endswith(".off") and cuts:
             holds.append((when - cuts.pop()).total_seconds())
     return {"cycle_hold_s": round(min(holds), 3) if holds else None, "samples": len(holds)}
+
+
+def bench_roles(bench: dict) -> dict[str, str]:
+    """The bench's port roles in the vocabulary NOAH-267 fixed on 2026-11-19.
+
+    ``csk6:log`` / ``csk6:burn`` are separate CH344 interfaces, while HISI logs
+    and burns through the *same* physical port - it is recorded as one
+    ``hisi:log_and_burn`` role so nobody reads two identical COM numbers as a
+    copy-paste bug. A declared spare (interface D) is kept for re-enumeration
+    checks.
+    """
+    roles: dict[str, str] = {"control": str(bench.get("control_port"))}
+    for chip_id in ("csk6", "hisi"):
+        log_port = (bench.get("log_ports") or {}).get(chip_id)
+        burn_port = (bench.get("burn_ports") or {}).get(chip_id)
+        if log_port and burn_port and str(log_port) == str(burn_port):
+            roles[f"{chip_id}:log_and_burn"] = str(log_port)
+            continue
+        if log_port:
+            roles[f"{chip_id}:log"] = str(log_port)
+        if burn_port:
+            roles[f"{chip_id}:burn"] = str(burn_port)
+    for chip_id, burn_port in (bench.get("burn_ports") or {}).items():
+        if chip_id not in ("csk6", "hisi"):
+            roles[f"{chip_id}:burn"] = str(burn_port)
+    if bench.get("spare_port"):
+        roles["spare"] = str(bench["spare_port"])
+    return roles
 
 
 def bench_device(bench: dict) -> dict:
@@ -989,6 +1022,6 @@ def promote_profile(profile_path: Path, measurement_path: Path, out_path: Path) 
 
 
 __all__ = ["COMMISSION_SCHEMA", "CommissionError", "validate_block", "select_bench", "apply_bench",
-           "guard_write", "check_bench", "bench_device", "expiry_state", "check_expiry",
+           "guard_write", "check_bench", "bench_device", "bench_roles", "expiry_state", "check_expiry",
            "check_manifest_pins", "check_run_pins", "ledger_path", "ledger_state", "assert_not_used",
            "consume", "measurement_from_run", "write_measurement", "promote_profile", "TIMING_KEYS"]

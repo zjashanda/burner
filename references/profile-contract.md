@@ -126,6 +126,7 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
      "control_port": "COM41",
      "log_ports": {"csk6": "COM38", "hisi": "COM39"},
      "burn_ports": {"csk6": "COM40", "hisi": "COM39"},
+     "spare_port": "COM37",
      "approval_ref": "NOAH-267-win003-dev02",
      "note": "NOAH-269 清点：hub 根口 2，无 iSerial"}
   ],
@@ -144,6 +145,8 @@ profile 是完整的现场描述，**没有任何继承机制**。加载器拒�
 | 每台自己的 ledger | `%TEMP%\burner-<profile>-<node>-<bench_id>-commissioning.json`；单台旧块的 ledger 名不变 |
 | 一台只写一次 | 该 bench 的 ledger 一旦有 `write_started`，换新 `approval_ref` 也拒绝（NOAH-267：每台最多 1 次） |
 | 台架身份 | `serial` 写 `usb_parent`（dev02–dev04 无真实 iSerial，COM 会变）；`usb_parent` 只在节点内唯一——win005 dev01 与 win003 dev03 是同串 |
+| 端口角色 | `A=csk6:log`、`B=csk6:burn`（仅 CSK6）、`C=hisi:log_and_burn`（日志与烧录复用同一物理口，按时序交接、不并发）、`D=spare`（只登记不臆测）；profile 的 `port_roles` 写明规则，各台 `spare_port` 登记 D 口 |
+| 角色证据 | `plan` 打印 `control / csk6:log / csk6:burn / hisi:log_and_burn / spare`；ledger 的 `roles` 与 ledger `device` 一并留档，避免把 C 口两个相同 COM 读成复制粘贴错误 |
 | `--device-snapshot` 刷新端口 | 只接受带同一 `bench_id`（或同一 `usb_parent`）的文档；无身份信息、或指向另一台，一律拒绝（退出码 3），避免 COM 漂移被悄悄用于另一台设备 |
 | `plan` | 不带 `--bench` 列出 4 台；带 `--bench` 渲染选中台的端口、时序开关与将执行的写步骤，全程零设备动作 |
 | `promote` | 只产出**被选中那台**的 measured profile（`name` 加 `-<bench_id>`、端口换成该台、`nodes` 缩成该节点、删掉 `benches`） |

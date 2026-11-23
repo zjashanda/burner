@@ -279,7 +279,8 @@
         "control.timing.power_sequence=connect_then_power：工具先开烧录口等待 → 继电器上下电 → 等 CONNECT WITH CHIP SUCCESS；默认 power_then_connect 保持旧行为",
         "CSK6 PASS 判据：WRITE SIZE = expected_write_bytes、设备 MD5 = expected_md5、4 个标记齐全、exit 0、connect_marker（声明 connect_then_power 时）；HISI PASS 判据：optLog 成功 token、无失败 token、4 条上下电回执全 PASS",
         "measured 只能由 commissioning.receipt.json + promote 产出；多台 profile 的 promote 只产出被选中那台的 measured profile",
-        "approval 有效期（expires_at）过期后 profile 仍可解析、plan/preflight 仍可用并打印 EXPIRED，但任何写步骤退出码 3；过期必须重新审批，不能重跑绕过"
+        "approval 有效期（expires_at）过期后 profile 仍可解析、plan/preflight 仍可用并打印 EXPIRED，但任何写步骤退出码 3；过期必须重新审批，不能重跑绕过",
+        "台架端口角色按 NOAH-267：A=csk6:log、B=csk6:burn（仅 CSK6）、C=hisi:log_and_burn（日志与烧录复用同一物理口）、D=spare；plan 与 ledger 的 roles 留档"
       ],
       "evidence_schema": "burner-receipt/v1",
       "version": "1.1.0",
@@ -375,7 +376,8 @@
         "每台只有 1 次机会：ledger 里 write_started 之后，同台任何 ref 都拒绝",
         "换台/重插后先重跑只读枚举；端口变化必须由带同一 bench_id/usb_parent 的快照刷新，否则拒绝",
         "profile 仍 draft；measured 由该台的 commissioning.receipt.json + promote 产出",
-        "approval 有效期（expires_at）过期后 profile 仍可解析、plan/preflight 仍可用并打印 EXPIRED，但任何写步骤退出码 3；过期必须重新审批，不能重跑绕过"
+        "approval 有效期（expires_at）过期后 profile 仍可解析、plan/preflight 仍可用并打印 EXPIRED，但任何写步骤退出码 3；过期必须重新审批，不能重跑绕过",
+        "台架端口角色按 NOAH-267：A=csk6:log、B=csk6:burn（仅 CSK6）、C=hisi:log_and_burn（日志与烧录复用同一物理口）、D=spare；plan 与 ledger 的 roles 留档"
       ],
       "evidence_schema": "burner-receipt/v1",
       "version": "1.0.0",
@@ -835,6 +837,6 @@
     "task_dir_owner": "lstest",
     "note": "burner 只写烧录产物，不负责建整套任务目录"
   },
-  "updated_at": "2026-11-23 10:25:54",
+  "updated_at": "2026-11-23 10:27:41",
   "updated_by": "NOAH-270"
 }

@@ -121,7 +121,8 @@ python scripts\burn.py all --profile ... --run-dir ... --device-snapshot role-ma
   端口只是 win003 参考值：**跨节点禁止复用 COM 映射**，运行时必须逐节点枚举并传 `--device-snapshot`。
   CSK6 走 `csk6-uart`（WRITE SIZE + 设备 MD5 + 4 标记 + exit 0 才 PASS）；未测量项全在 `measurement_required`。
 - `scripts/profiles/csk6-hisi-win003.json` / `csk6-hisi-win005.json`：同一台架族的 **4 台台架 × 每节点**（dev01–dev04）**draft**。
-  `commissioning.benches[]` 每台一条：`bench_id` / `node` / `serial`（usb_parent）/ `control_port` / `log_ports` / `burn_ports` / `approval_ref`（`NOAH-267-<node>-<bench>`）。
+  `commissioning.benches[]` 每台一条：`bench_id` / `node` / `serial`（usb_parent）/ `control_port` / `log_ports` / `burn_ports` / `spare_port` / `approval_ref`（`NOAH-267-<node>-<bench>`）。
+  端口角色按 NOAH-267 确认口径：A=`csk6:log`、B=`csk6:burn`（仅 CSK6）、C=`hisi:log_and_burn`（复用同一物理口）、D=spare（`port_roles` 声明）。
   `--bench <bench_id>` 选中一台；该台的端口就是批准里写的端口。每台一个 ledger，`%TEMP%\burner-<profile>-<node>-<bench_id>-commissioning.json`。
   端口来自 NOAH-268/269 只读清点（`usb_parent` 是主键，COM 会随重插变化），`control.timing.power_sequence=connect_then_power`。
 

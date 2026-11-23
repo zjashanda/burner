@@ -371,6 +371,55 @@ class BenchGuardTests(unittest.TestCase):
                                               resolved)
 
 
+class BenchPortRoleTests(unittest.TestCase):
+    """NOAH-267 fixed the role vocabulary: A=log, B=CSK6 burn, C=HISI log_and_burn, D=spare."""
+
+    def test_roles_follow_the_confirmed_rule(self):
+        for path, first in ((WIN003, {"control": "COM36", "csk6:log": "COM35",
+                                      "csk6:burn": "COM34", "hisi:log_and_burn": "COM32",
+                                      "spare": "COM33"}),
+                            (WIN005, {"control": "COM15", "csk6:log": "COM36",
+                                      "csk6:burn": "COM37", "hisi:log_and_burn": "COM39",
+                                      "spare": "COM38"})):
+            profile = Profile(path)
+            benches = profile.commissioning["benches"]
+            self.assertEqual(commission_module.bench_roles(benches[0]), first)
+            for bench in benches:
+                roles = commission_module.bench_roles(bench)
+                # B is CSK6-only: it must never be the same port as the CSK6 log
+                self.assertNotEqual(roles["csk6:log"], roles["csk6:burn"], bench["bench_id"])
+                # C carries HISI log *and* burn as one shared physical port
+                self.assertIn("hisi:log_and_burn", roles, bench["bench_id"])
+                self.assertNotIn("hisi:log", roles, bench["bench_id"])
+                self.assertNotIn("hisi:burn", roles, bench["bench_id"])
+                self.assertEqual(roles["hisi:log_and_burn"], bench["burn_ports"]["hisi"])
+                self.assertEqual(roles["hisi:log_and_burn"], bench["log_ports"]["hisi"])
+                self.assertIn("spare", roles, bench["bench_id"])
+
+    def test_the_profiles_declare_the_role_rule_and_a_spare(self):
+        for path in (WIN003, WIN005):
+            raw = load(path)
+            self.assertIn("C", raw["port_roles"])
+            self.assertIn("log_and_burn", raw["port_roles"]["C"])
+            self.assertIn("B", raw["port_roles"])
+            self.assertIn("仅 CSK6", raw["port_roles"]["B"])
+            for bench in raw["commissioning"]["benches"]:
+                self.assertRegex(bench["spare_port"], r"^COM\d+$")
+
+    def test_plan_prints_the_shared_c_port(self):
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                code = cli.main(["plan", "--profile", str(WIN003), "--run-dir", tmp, "--bench", "dev02"])
+            text = buffer.getvalue()
+        self.assertEqual(code, 0)
+        self.assertIn("hisi:log_and_burn=COM39", text)
+        self.assertIn("csk6:burn=COM40", text)
+        self.assertIn("spare=COM37", text)
+
+
 class BenchLedgerTests(unittest.TestCase):
     def test_each_bench_gets_its_own_ledger(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -390,6 +439,8 @@ class BenchLedgerTests(unittest.TestCase):
                                                    {"bench_id": "dev02", "multi": True})
             self.assertEqual(spent["approved_by"], "郑保山")
             self.assertEqual(spent["approval_ref"], "NOAH-267-win003-dev02")
+            self.assertEqual(spent["roles"]["hisi:log_and_burn"], "COM39")
+            self.assertEqual(spent["roles"]["csk6:burn"], "COM40")
             self.assertTrue(spent["write_started"])
             self.assertFalse(commission_module.ledger_state(
                 profile, "win003", {"bench_id": "dev03", "multi": True}))

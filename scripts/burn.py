@@ -29,8 +29,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core.assets import AssetError, Assets, FetchBlocked  # noqa: E402
 from core.bench import Audit, BenchError, BenchLock  # noqa: E402
 from core.commission import (CommissionError, apply_bench, assert_not_used,  # noqa: E402
-                             check_manifest_pins, check_run_pins, consume, expiry_state, guard_write,
-                             promote_profile, select_bench, write_measurement)  # noqa: E402
+                             bench_roles, check_manifest_pins, check_run_pins, consume,
+                             expiry_state, guard_write, promote_profile, select_bench,
+                             write_measurement)  # noqa: E402
 from core.contract import SCHEMAS, now_bj  # noqa: E402
 from core.device_snapshot import (DeviceSnapshotError, apply_snapshot,  # noqa: E402
                                   resolve_snapshot)
@@ -80,12 +81,13 @@ def plan_text(profile: Profile, assets: Assets, material_dir: Path | None, cache
             f"bench: {bench['bench_id']} (node {bench['node']}, usb {bench['serial']}, "
             f"approval {bench['approval_ref']}, control {bench['control_port']}, "
             f"burn {bench.get('burn_ports') or {}}, log {bench.get('log_ports') or {}})")
+        lines.append("  roles: " + ", ".join(f"{role}={port}" for role, port in bench_roles(bench).items()))
     elif benches:
         lines.append(f"benches: {len(benches)} (pick one with --bench <bench_id>)")
         for entry in benches:
+            roles = ", ".join(f"{role}={port}" for role, port in bench_roles(entry).items())
             lines.append(f"  - {entry['bench_id']}: node {entry['node']} usb {entry['serial']} "
-                         f"control {entry['control_port']} burn {entry.get('burn_ports') or {}} "
-                         f"approval {entry['approval_ref']}")
+                         f"approval {entry['approval_ref']} | {roles}")
     block = getattr(profile, "commissioning", None)
     if block:
         window = expiry_state(block)
