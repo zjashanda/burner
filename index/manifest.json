@@ -26,6 +26,6 @@
     "asset_manifest": "assets/manifest.json"
   },
   "routing_contract": "agents read index/index.json first, then route capability -> skill -> chip -> project -> profile -> workflow; never guess a profile or tool",
-  "updated_at": "2026-11-23 10:25:54",
+  "updated_at": "2026-11-23 10:27:41",
   "updated_by": "NOAH-270"
 }

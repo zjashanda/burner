@@ -27,6 +27,15 @@
       "hisi:burn": "COM32"
     }
   },
+  "port_roles": {
+    "source": "NOAH-267 2026-11-19 端口角色最终规则（郑保山确认）",
+    "control": "独立 VID_8765&PID_5678 usbser 继电器口，不属于 CH344 接口",
+    "A": "csk6:log（CSK6 侧日志）",
+    "B": "csk6:burn（仅 CSK6 烧录）",
+    "C": "hisi:log_and_burn（HISI 日志与烧录复用同一物理口，按时序交接，不并发）",
+    "D": "spare（未定义用途，只登记不臆测）",
+    "note": "device-map/port-map/profile 必须表达 C 口复用关系；禁止把「B=烧录」推广到 HISI"
+  },
   "control": {
     "kind": "serial-relay",
     "port": "COM36",
@@ -246,7 +255,8 @@
           "hisi": "COM32"
         },
         "approval_ref": "NOAH-267-win003-dev01",
-        "note": "NOAH-269 清点：hub 根口 3，CH344 有真实 iSerial；dev01 端口与 NOAH-266 记录一致（36/35/34/32）；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+        "note": "NOAH-269 清点：hub 根口 3，CH344 有真实 iSerial；dev01 端口与 NOAH-266 记录一致（36/35/34/32）；D 口 spare 已登记；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）",
+        "spare_port": "COM33"
       },
       {
         "bench_id": "dev02",
@@ -263,7 +273,8 @@
           "hisi": "COM39"
         },
         "approval_ref": "NOAH-267-win003-dev02",
-        "note": "NOAH-269 清点：hub 根口 2，无 iSerial，主键只能用 usb_parent；dev 标签按 hub 端口序推断，需现场丝印确认；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+        "note": "NOAH-269 清点：hub 根口 2，无 iSerial，主键只能用 usb_parent；dev 标签按 hub 端口序推断，需现场丝印确认；D 口 spare 已登记；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）",
+        "spare_port": "COM37"
       },
       {
         "bench_id": "dev03",
@@ -280,7 +291,8 @@
           "hisi": "COM50"
         },
         "approval_ref": "NOAH-267-win003-dev03",
-        "note": "NOAH-269 清点：hub 根口 4，无 iSerial；dev 标签按 hub 端口序推断，需现场丝印确认；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+        "note": "NOAH-269 清点：hub 根口 4，无 iSerial；dev 标签按 hub 端口序推断，需现场丝印确认；D 口 spare 已登记；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）",
+        "spare_port": "COM48"
       },
       {
         "bench_id": "dev04",
@@ -297,7 +309,8 @@
           "hisi": "COM55"
         },
         "approval_ref": "NOAH-267-win003-dev04",
-        "note": "NOAH-269 清点：hub 根口 5，无 iSerial；dev 标签按 hub 端口序推断，需现场丝印确认；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）"
+        "note": "NOAH-269 清点：hub 根口 5，无 iSerial；dev 标签按 hub 端口序推断，需现场丝印确认；D 口 spare 已登记；relay 通道→台架映射 UNVERIFIED（只读清点禁止发继电器命令）",
+        "spare_port": "COM52"
       }
     ]
   },
